@@ -161,6 +161,19 @@ func (p *Plan) walkDir(home string, e catalog.Entry, cp catalog.Path, walkRoot, 
 			if matchesAny(relTo(walkRoot, abs), cp.Skip) {
 				return filepath.SkipDir
 			}
+			// A git clone inside a captured tree is somebody else's software,
+			// not configuration. Copying it produces a stale, detached copy of
+			// something a one-line clone restores current — and on a real
+			// machine one such clone (powerlevel10k, under ~/.oh-my-zsh/custom)
+			// accounted for most of a 795-file capture and five of six
+			// secret-scanner findings, all of them from its own source code.
+			if abs != walkRoot && isGitClone(abs) {
+				p.Excluded = append(p.Excluded, bundle.Excluded{
+					Rel:    relOrAbs(home, abs),
+					Reason: vendoredReason(abs),
+				})
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if matchesAny(relTo(walkRoot, abs), cp.Skip) {
@@ -528,4 +541,21 @@ func (p *Plan) dedupeExcluded() {
 		out = append(out, e)
 	}
 	p.Excluded = out
+}
+
+// isGitClone reports whether a directory is the root of a git working tree.
+func isGitClone(dir string) bool {
+	info, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil && (info.IsDir() || info.Mode().IsRegular())
+}
+
+// vendoredReason names the clone and, where it can be read, where it came from,
+// so the report says what to run rather than only what was skipped.
+func vendoredReason(dir string) string {
+	reason := "third-party git clone — reinstall it from its own source"
+	remote, ok := primaryRemote(dir)
+	if !ok || remote == "" {
+		return reason
+	}
+	return "third-party git clone — git clone " + remote
 }

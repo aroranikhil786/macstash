@@ -17,4 +17,7 @@ restore:
   note: |
     Oh My Zsh itself is not captured — reinstall it from ohmyz.sh first, then
     these custom themes and plugins drop back into ~/.oh-my-zsh/custom.
-    Plugins cloned from GitHub need cloning again.
+    Anything under custom/ that is a git clone — powerlevel10k, most plugins —
+    is skipped rather than copied, and the capture report names it along with
+    the command to clone it back. A detached copy of a theme is worse than a
+    current one, and it is the same reasoning that keeps the framework out.

@@ -125,7 +125,12 @@ func Scan(content []byte, rel string) []Finding {
 // containing one.
 var indirection = regexp.MustCompile(`^[$%{(]|` + // ${VAR}, $(cmd), %VAR%, {{ }}
 	`^(os\.|process\.env|System\.getenv|ENV\[|Deno\.env|config\.|secrets\.|vault:)|` +
-	`\$\{[A-Za-z_]|<%=|\{\{`)
+	// A shell expansion anywhere in the value, not just at the start. zsh
+	// writes `: ${token::=${(Q)${~token}}}`, where the assignment regex takes
+	// the value as `:=${(Q)...}` — leading colon, so an anchored match missed
+	// it and powerlevel10k's own parser reported as four separate findings.
+	`\$\{|\$\(|` +
+	`<%=|\{\{`)
 
 // isIndirection reports whether a value refers to a secret rather than being one.
 func isIndirection(value string) bool {

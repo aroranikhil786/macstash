@@ -223,3 +223,87 @@ func TestManifestChecksumsMatchCapturedBytes(t *testing.T) {
 		}
 	}
 }
+
+// A git clone inside a captured tree is somebody else's software, not
+// configuration. On a real machine, powerlevel10k under ~/.oh-my-zsh/custom
+// accounted for most of a 795-file capture and produced five of six
+// secret-scanner findings from its own source — while the catalog entry's own
+// note already said such clones must be cloned again rather than copied.
+func TestCaptureSkipsGitClonesInsideACapturedTree(t *testing.T) {
+	home := t.TempDir()
+	custom := filepath.Join(home, ".oh-my-zsh", "custom")
+	theme := filepath.Join(custom, "themes", "powerlevel10k")
+	if err := os.MkdirAll(filepath.Join(theme, "internal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The marker that makes it a clone.
+	if err := os.MkdirAll(filepath.Join(theme, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(theme, "internal", "p10k.zsh"), "# thousands of lines\n")
+	write(t, filepath.Join(theme, "powerlevel10k.zsh-theme"), "# theme\n")
+	// The user's own file, beside it, which must still be captured.
+	write(t, filepath.Join(custom, "mine.zsh"), "alias gs='git status'\n")
+
+	p := &Plan{Home: home}
+	entry := catalog.Entry{ID: "ohmyzsh"}
+	cp := catalog.Path{Path: "~/.oh-my-zsh/custom", Class: "public"}
+	if err := p.walkDir(home, entry, cp, custom, custom, map[string]bool{}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, f := range p.Files {
+		if strings.Contains(f.Rel, "powerlevel10k") {
+			t.Errorf("a vendored clone should not be captured, got %s", f.Rel)
+		}
+	}
+	var mine bool
+	for _, f := range p.Files {
+		if strings.HasSuffix(f.Rel, "mine.zsh") {
+			mine = true
+		}
+	}
+	if !mine {
+		t.Error("the user's own file beside the clone must still be captured")
+	}
+
+	// Skipping silently would be the same bug in a different place.
+	var reported bool
+	for _, e := range p.Excluded {
+		if strings.Contains(e.Rel, "powerlevel10k") {
+			reported = true
+			if !strings.Contains(e.Reason, "clone") {
+				t.Errorf("the reason should say it is a clone, got %q", e.Reason)
+			}
+		}
+	}
+	if !reported {
+		t.Error("a skipped clone must be reported, not silently dropped")
+	}
+}
+
+// A directory that merely contains a file called .git-something is not a clone.
+func TestIsGitCloneNeedsAnActualGitEntry(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, ".gitignore"), "x\n")
+
+	if isGitClone(dir) {
+		t.Error("a .gitignore does not make a directory a clone")
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !isGitClone(dir) {
+		t.Error("a .git directory does make it one")
+	}
+}
+
+// A worktree or submodule uses a .git *file* rather than a directory.
+func TestIsGitCloneAcceptsAGitFile(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, ".git"), "gitdir: /elsewhere/.git/modules/x\n")
+
+	if !isGitClone(dir) {
+		t.Error("a .git file marks a worktree or submodule and is still a clone")
+	}
+}

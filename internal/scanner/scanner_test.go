@@ -138,3 +138,38 @@ func TestLiteralSecretsStillCaught(t *testing.T) {
 		}
 	}
 }
+
+// The lines that produced four of six findings on a real machine, all of them
+// from powerlevel10k's own parser rather than from anyone's configuration.
+//
+// zsh writes `: ${token::=${(Q)${~token}}}`. The assignment regex takes the
+// value as `:=${(Q)${~token}}}` — a leading colon — so an indirection test
+// anchored to the start of the value missed it. A report that is five-sixths
+// noise is a report people stop reading.
+func TestScanIgnoresShellParameterExpansion(t *testing.T) {
+	noisy := []string{
+		": ${token::=${(Q)${~token}}}\n",
+		`typeset -g "_p9k__google_application_credentials_${_p9k_x}"` + "\n",
+		"local token=${(Q)${(z)line}}\n",
+		"SECRET_TOKEN=$(cat /run/secrets/token)\n",
+		"api_key=${API_KEY:-${FALLBACK_KEY}}\n",
+	}
+	for _, line := range noisy {
+		if f := Scan([]byte(line), "p10k.zsh"); len(f) != 0 {
+			t.Errorf("%q should not be reported, got %+v", line, f)
+		}
+	}
+}
+
+// The fix must not silence a real literal secret assigned to the same names.
+func TestScanStillFindsLiteralSecretsAfterTheExpansionFix(t *testing.T) {
+	real := []string{
+		"SECRET_TOKEN=8f3a9c2e1b7d4056af21c3d4\n",
+		"api_key = 'kJ8sLp2mQx9vRt4nZw7bYc3d'\n",
+	}
+	for _, line := range real {
+		if f := Scan([]byte(line), "config.sh"); len(f) == 0 {
+			t.Errorf("%q is a literal secret and must still be reported", line)
+		}
+	}
+}
