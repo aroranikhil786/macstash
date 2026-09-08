@@ -39,6 +39,8 @@ type Manifest struct {
 	Repos []Repo `json:"repos,omitempty"`
 	// System is the list-shaped inventory: versions, packages, extensions.
 	System System `json:"system,omitempty"`
+	// LaunchAgents are background jobs. Never restored without an explicit flag.
+	LaunchAgents []LaunchAgent `json:"launch_agents,omitempty"`
 	// ScanFindings are things the secret scanner wants a human to look at. They
 	// were captured, not removed — the scanner only ever reports.
 	ScanFindings []scanner.Finding `json:"scan_findings,omitempty"`
@@ -138,6 +140,20 @@ type System struct {
 	HostsEntries   []string          `json:"hosts_entries,omitempty"`
 	// Prefs are exported preference domains, catalog-named only.
 	Prefs []string `json:"exported_pref_domains,omitempty"`
+}
+
+// LaunchAgent is one per-user background job.
+//
+// Content is carried so the agent can be restored, but restore refuses to write
+// any of them without an explicit flag: a LaunchAgent runs code at every login,
+// and that is not something to reinstate by accident.
+type LaunchAgent struct {
+	Label            string   `json:"label"`
+	File             string   `json:"file"`
+	ProgramArguments []string `json:"program_arguments,omitempty"`
+	RunAtLoad        bool     `json:"run_at_load,omitempty"`
+	KeepAlive        bool     `json:"keep_alive,omitempty"`
+	Content          []byte   `json:"-"`
 }
 
 // Brew summarises the captured Brewfile, and carries the counts that capture

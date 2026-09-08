@@ -89,3 +89,37 @@ func TestSummaryNeverClaimsClean(t *testing.T) {
 		t.Errorf("zero-finding summary must disclaim, got: %s", s)
 	}
 }
+
+// A value that reads a secret from elsewhere is not a secret. Shell scripts are
+// full of these, and reporting them is how a scan report becomes noise that
+// nobody reads — which was the real-world failure: ~/.local/bin/sp was flagged
+// for `export OPENAI_API_KEY="${OPENAI_API_KEY:-}"`, which contains no key.
+func TestIndirectionIsNotASecret(t *testing.T) {
+	clean := []string{
+		`export OPENAI_API_KEY="${OPENAI_API_KEY:-}"` + "\n",
+		`export GITHUB_TOKEN=$GITHUB_TOKEN` + "\n",
+		`api_key = os.environ["OPENAI_API_KEY"]` + "\n",
+		`token: ${{ secrets.GITHUB_TOKEN }}` + "\n",
+		`password = process.env.DB_PASSWORD` + "\n",
+		`SECRET_KEY=$(cat /run/secrets/key)` + "\n",
+		`api_key = System.getenv("API_KEY")` + "\n",
+	}
+	for _, c := range clean {
+		if f := Scan([]byte(c), "script.sh"); len(f) != 0 {
+			t.Errorf("false positive on %q: %+v", strings.TrimSpace(c), f)
+		}
+	}
+}
+
+// The fix must not blind the scanner to values that really are literals.
+func TestLiteralSecretsStillCaught(t *testing.T) {
+	dirty := []string{
+		`export OPENAI_API_KEY="sk-proj-aBcDeFgHiJkLmNoPqRsTuVwXyZ01"` + "\n",
+		`DATABASE_PASSWORD=xJ9mQ2vL8pR4tW6yZ1aB3cD5` + "\n",
+	}
+	for _, c := range dirty {
+		if f := Scan([]byte(c), "script.sh"); len(f) == 0 {
+			t.Errorf("missed a real literal secret in %q", strings.TrimSpace(c))
+		}
+	}
+}

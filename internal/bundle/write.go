@@ -130,6 +130,27 @@ func (w *Writer) SetSystem(s System) error {
 	return os.WriteFile(filepath.Join(w.root, "manifests", "system.json"), append(data, '\n'), 0o600)
 }
 
+// SetLaunchAgents stores background jobs under launchagents/.
+func (w *Writer) SetLaunchAgents(agents []LaunchAgent) error {
+	if len(agents) == 0 {
+		return nil
+	}
+	dir := filepath.Join(w.root, "launchagents")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	for _, a := range agents {
+		if len(a.Content) == 0 {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dir, a.File), a.Content, 0o600); err != nil {
+			return err
+		}
+	}
+	w.man.LaunchAgents = agents
+	return nil
+}
+
 // SetInventory records the application and repository inventories, both in the
 // manifest and as standalone files under manifests/, so they can be read
 // without a JSON parser when someone is halfway through setting up a new laptop.

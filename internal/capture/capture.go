@@ -55,6 +55,8 @@ type Plan struct {
 	Prefs map[string][]byte
 	// ScanFindings is secret-scanner output over everything captured.
 	ScanFindings []scanner.Finding
+	// LaunchAgents are background jobs found on the machine.
+	LaunchAgents []bundle.LaunchAgent
 	// Management is the corporate-device advisory, if any.
 	Management Management
 	// BrewConsulted is false when brew could not be run, in which case the
@@ -116,6 +118,7 @@ func Scan(home string, entries []catalog.Entry) (*Plan, error) {
 	p.Repos = ScanRepos(home, 4)
 	p.System = ScanSystem(home)
 	p.Management = DetectManagement()
+	p.LaunchAgents = ScanLaunchAgents(home)
 	p.exportPrefs(entries)
 
 	sort.Slice(p.Files, func(i, j int) bool { return p.Files[i].Rel < p.Files[j].Rel })
@@ -258,6 +261,18 @@ func (p *Plan) Write(w *bundle.Writer) error {
 	if err := w.SetSystem(p.System); err != nil {
 		return err
 	}
+	if err := w.SetLaunchAgents(p.LaunchAgents); err != nil {
+		return err
+	}
+	// LaunchAgent plists routinely carry tokens in EnvironmentVariables, so they
+	// are scanned too. These findings are recorded separately because the agents
+	// are stored outside the home/ tree.
+	var agentFindings []scanner.Finding
+	for _, a := range p.LaunchAgents {
+		agentFindings = append(agentFindings, scanner.Scan(a.Content, "LaunchAgents/"+a.File)...)
+	}
+	p.ScanFindings = append(p.ScanFindings, agentFindings...)
+	w.RecordScanFindings(agentFindings)
 	return nil
 }
 

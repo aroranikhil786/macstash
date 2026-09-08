@@ -102,6 +102,13 @@ func Scan(content []byte, rel string) []Finding {
 			if placeholders[strings.ToLower(value)] {
 				continue
 			}
+			// A value that reads another variable is not a secret. Shell scripts
+			// are full of TOKEN="${TOKEN:-}" and api_key = os.environ[...], and
+			// reporting those trains people to skim past the report — which costs
+			// far more than the handful of real findings it would surface.
+			if isIndirection(value) {
+				continue
+			}
 			if shannon(value) >= 3.5 {
 				findings = append(findings, Finding{
 					File: rel, Line: line,
@@ -112,6 +119,21 @@ func Scan(content []byte, rel string) []Finding {
 		}
 	}
 	return findings
+}
+
+// indirection matches values that read a secret from somewhere else rather than
+// containing one.
+var indirection = regexp.MustCompile(`^[$%{(]|` + // ${VAR}, $(cmd), %VAR%, {{ }}
+	`^(os\.|process\.env|System\.getenv|ENV\[|Deno\.env|config\.|secrets\.|vault:)|` +
+	`\$\{[A-Za-z_]|<%=|\{\{`)
+
+// isIndirection reports whether a value refers to a secret rather than being one.
+func isIndirection(value string) bool {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return true
+	}
+	return indirection.MatchString(v)
 }
 
 // excerpt returns a short, masked fragment around a match.

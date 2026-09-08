@@ -568,7 +568,12 @@ func cmdRestore(f *flags) error {
 		p.RestoreToolchains(os.Stdout, false)
 		p.RestoreExtensions(os.Stdout, false)
 		p.ReportOnly(os.Stdout)
-		offerBundleDeletion(f.args[0], f.yes)
+		// No offerBundleDeletion here. --plan must not change anything, and
+		// offering a destructive action from a dry run is exactly the kind of
+		// surprise the flag exists to rule out.
+		if err := restore.RestoreLaunchAgents(home, p.Manifest.LaunchAgents, p.Staging, f.launchAgents, false, os.Stdout); err != nil {
+			return err
+		}
 		if c := restore.PermissionChecklist(p.Manifest.Requirements); c != "" {
 			fmt.Print(c)
 		}
@@ -605,6 +610,9 @@ func cmdRestore(f *flags) error {
 	}
 	fmt.Printf("\nRecorded this restore at ~/%s — `macstash doctor` diffs against it.\n", restore.ManifestPath)
 
+	if err := restore.RestoreLaunchAgents(home, p.Manifest.LaunchAgents, p.Staging, f.launchAgents, true, os.Stdout); err != nil {
+		return err
+	}
 	p.ReportOnly(os.Stdout)
 	offerBundleDeletion(f.args[0], f.yes)
 
