@@ -205,6 +205,18 @@ CI rejects any entry naming a path on the never list. That list lives in Go
 (`internal/classify/never.go`), not YAML, so a catalog change cannot reach around
 it.
 
+## Which terminal to run it from
+
+Run `restore` from **Terminal.app**, not iTerm2.
+
+iTerm2, like Karabiner and Rectangle, rewrites its own preferences when it
+quits, so anything restored underneath a running copy is overwritten the moment
+you close it. macstash detects this and refuses — but if you are running inside
+iTerm2, "quit it and re-run" is impossible advice, because quitting ends the
+restore. It now says so and tells you to switch terminals instead.
+
+Capture is unaffected; it only reads.
+
 ## Installing
 
 ```

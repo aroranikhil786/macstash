@@ -248,3 +248,81 @@ func deselect(d *selection.Document, category, key string) {
 	}
 	panic("deselect: no item " + key + " in " + category)
 }
+
+// An entry that captures no files still has something to lose. iTerm2 is the
+// case that caught this: on a typical Mac its configuration is a preference
+// domain and nothing else, so building the selection list from files alone left
+// it unoffered — and therefore treated as deselected, which silently removed
+// its preferences and its quit-first requirement from the bundle.
+func TestSelectionOffersEntriesThatOnlyHavePreferences(t *testing.T) {
+	p := &Plan{
+		Files: []Planned{{Entry: "zsh", Rel: ".zshrc"}},
+		Prefs: map[string][]byte{"com.googlecode.iterm2": []byte("x")},
+		Requirements: []bundle.Requirement{
+			{Entry: "iterm2", Name: "iTerm2", QuitFirst: true},
+		},
+		System: bundle.System{
+			PrefOwners: map[string][]string{"iterm2": {"com.googlecode.iterm2"}},
+			Prefs:      []string{"com.googlecode.iterm2"},
+		},
+	}
+
+	d := p.SelectionDocument()
+
+	var offered []string
+	for _, c := range d.Categories {
+		if c.Name != CatConfigs {
+			continue
+		}
+		for _, it := range c.Items {
+			offered = append(offered, it.Key)
+		}
+	}
+	if !containsString(offered, "iterm2") {
+		t.Fatalf("a prefs-only entry must be offered, got %v", offered)
+	}
+
+	// And selecting everything must leave it fully intact.
+	p.ApplySelection(d)
+	if len(p.Prefs) != 1 {
+		t.Errorf("preferences were dropped: %v", p.Prefs)
+	}
+	if len(p.Requirements) != 1 {
+		t.Errorf("the quit-first requirement was dropped: %v", p.Requirements)
+	}
+	if _, ok := p.System.PrefOwners["iterm2"]; !ok {
+		t.Errorf("pref ownership was dropped: %v", p.System.PrefOwners)
+	}
+}
+
+// Deselecting a prefs-only entry should still work — the point is that it is a
+// choice, not an accident.
+func TestDeselectingAPrefsOnlyEntryRemovesItsPreferences(t *testing.T) {
+	p := &Plan{
+		Prefs: map[string][]byte{"com.googlecode.iterm2": []byte("x"), "NSGlobalDomain": []byte("y")},
+		System: bundle.System{
+			PrefOwners: map[string][]string{"iterm2": {"com.googlecode.iterm2"}},
+		},
+	}
+	d := p.SelectionDocument()
+	deselect(&d, CatConfigs, "iterm2")
+
+	p.ApplySelection(d)
+
+	if _, ok := p.Prefs["com.googlecode.iterm2"]; ok {
+		t.Error("the deselected entry's preference should be gone")
+	}
+	// A domain nobody owns must not be swept up with it.
+	if _, ok := p.Prefs["NSGlobalDomain"]; !ok {
+		t.Error("an unowned preference domain must survive")
+	}
+}
+
+func containsString(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}

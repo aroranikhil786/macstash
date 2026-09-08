@@ -2,6 +2,7 @@ package restore
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -135,4 +136,51 @@ func permissionLabel(key string) string {
 	default:
 		return key
 	}
+}
+
+// hostTerminals maps $TERM_PROGRAM to the catalog entry for that terminal.
+//
+// Values are what the terminals actually export, checked rather than guessed:
+// iTerm2 sets "iTerm.app", Apple's Terminal sets "Apple_Terminal".
+var hostTerminals = map[string]string{
+	"iTerm.app":      "iterm2",
+	"Apple_Terminal": "terminal",
+	"WezTerm":        "wezterm",
+	"ghostty":        "ghostty",
+	"alacritty":      "alacritty",
+	"Alacritty":      "alacritty",
+	"vscode":         "vscode",
+}
+
+// HostTerminalEntry returns the catalog entry id of the terminal macstash is
+// running inside, or "" if it cannot tell.
+func HostTerminalEntry() string {
+	return hostTerminals[os.Getenv("TERM_PROGRAM")]
+}
+
+// RunningInside reports whether a blocked requirement is the terminal this
+// process is running in.
+//
+// This is the difference between an instruction and a dead end. "iTerm2 is
+// running — quit it and re-run" is impossible advice when the shell printing it
+// lives inside iTerm2: quitting takes the restore with it. The user needs to be
+// told to start a different terminal, which is not something they would infer.
+func RunningInside(r bundle.Requirement) bool {
+	entry := HostTerminalEntry()
+	return entry != "" && entry == r.Entry
+}
+
+// HostTerminalAdvice returns the instruction for a blocked app that happens to
+// be the terminal in use.
+func HostTerminalAdvice(r bundle.Requirement) string {
+	name := r.Name
+	if name == "" {
+		name = r.Entry
+	}
+	if HostTerminalEntry() == "terminal" {
+		return "you are running inside " + name + " — quitting it would end this restore.\n" +
+			"        Run macstash from a different terminal instead"
+	}
+	return "you are running inside " + name + " — quitting it would end this restore.\n" +
+		"        Open Terminal (in /Applications/Utilities) and run macstash from there"
 }

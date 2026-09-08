@@ -19,4 +19,6 @@ restore:
   permissions: [full_disk_access]
   note: |
     iTerm2 rewrites its preferences when it quits, so it must not be running
-    during restore or it will overwrite what was just written.
+    during restore or it will overwrite what was just written. Run the restore
+    from Terminal.app — quitting iTerm2 to satisfy this would end the restore
+    with it.

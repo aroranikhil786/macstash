@@ -33,12 +33,12 @@ const (
 func (p *Plan) SelectionDocument() selection.Document {
 	var d selection.Document
 
-	if entries := p.entryCounts(); len(entries) > 0 {
+	if entries := p.selectableEntries(); len(entries) > 0 {
 		items := make([]selection.Item, 0, len(entries))
 		for _, e := range sortedKeys(entries) {
 			items = append(items, selection.Item{
 				Key:      e,
-				Note:     fmt.Sprintf("%d file(s)", entries[e]),
+				Note:     entries[e],
 				Selected: true,
 			})
 		}
@@ -284,12 +284,55 @@ func filterNamespaced(in map[string][]string, keep map[string]bool) map[string][
 	return out
 }
 
-func (p *Plan) entryCounts() map[string]int {
-	counts := map[string]int{}
+// selectableEntries lists every catalog entry that contributes anything,
+// described by what it contributes.
+//
+// Counting files alone was wrong, and wrong in the dangerous direction. iTerm2
+// captures no files on a typical Mac — its configuration is a preference domain
+// — so it never appeared in the selection, was therefore treated as deselected,
+// and had its preferences and its quit-first requirement silently removed from
+// the bundle. An entry that is never offered must never be droppable.
+func (p *Plan) selectableEntries() map[string]string {
+	files := map[string]int{}
 	for _, f := range p.Files {
-		counts[f.Entry]++
+		files[f.Entry]++
 	}
-	return counts
+	prefs := map[string]int{}
+	for entry, domains := range p.System.PrefOwners {
+		prefs[entry] = len(domains)
+	}
+
+	all := map[string]bool{}
+	for e := range files {
+		all[e] = true
+	}
+	for e := range prefs {
+		all[e] = true
+	}
+	// Notes and requirements belong to an entry too; an entry carrying only a
+	// restore caveat still has something to lose.
+	for _, n := range p.Notes {
+		all[n.Entry] = true
+	}
+	for _, r := range p.Requirements {
+		all[r.Entry] = true
+	}
+
+	out := make(map[string]string, len(all))
+	for e := range all {
+		var parts []string
+		if n := files[e]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d file(s)", n))
+		}
+		if n := prefs[e]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d preference domain(s)", n))
+		}
+		if len(parts) == 0 {
+			parts = append(parts, "restore notes only")
+		}
+		out[e] = strings.Join(parts, ", ")
+	}
+	return out
 }
 
 func itemsFor(names []string) []selection.Item {

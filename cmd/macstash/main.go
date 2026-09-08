@@ -759,6 +759,10 @@ func cmdRestore(f *flags) error {
 		fmt.Println("These applications are running and rewrite their own configuration when")
 		fmt.Println("they quit, so restoring underneath them would be silently undone:")
 		for _, b := range p.BlockedApps {
+			if restore.RunningInside(b) {
+				fmt.Printf("  %s — %s\n", b.Name, restore.HostTerminalAdvice(b))
+				continue
+			}
 			fmt.Printf("  %s — quit it, then re-run (restore is safe to repeat)\n", b.Name)
 		}
 		fmt.Println()

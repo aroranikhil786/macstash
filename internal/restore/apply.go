@@ -84,8 +84,10 @@ func Prepare(archive, home string) (*Plan, func(), error) {
 	// running and would overwrite the result on quit.
 	p.BlockedApps = BlockedByRunningApp(man.Requirements, RunningApps())
 	blockedEntry := map[string]string{}
+	blockedReq := map[string]bundle.Requirement{}
 	for _, b := range p.BlockedApps {
 		blockedEntry[b.Entry] = b.Name
+		blockedReq[b.Entry] = b
 	}
 
 	for _, item := range man.Items {
@@ -94,7 +96,7 @@ func Prepare(archive, home string) (*Plan, func(), error) {
 		if name, blocked := blockedEntry[item.Entry]; blocked {
 			p.Actions = append(p.Actions, Action{
 				Rel: item.Rel, Kind: Refused,
-				Reason: name + " is running and rewrites its config on quit — quit it and re-run",
+				Reason: blockedReason(name, blockedReq[item.Entry]),
 			})
 			continue
 		}
@@ -285,4 +287,13 @@ func shortenHome(home, p string) string {
 		return "~/" + filepath.ToSlash(rel)
 	}
 	return p
+}
+
+// blockedReason explains a refusal, distinguishing the case where the app to be
+// quit is the terminal the user is standing in.
+func blockedReason(name string, req bundle.Requirement) string {
+	if RunningInside(req) {
+		return name + " is running and rewrites its config on quit — run macstash from a different terminal"
+	}
+	return name + " is running and rewrites its config on quit — quit it and re-run"
 }
