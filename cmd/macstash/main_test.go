@@ -407,3 +407,14 @@ func TestUsageStatesTheCredentialPromise(t *testing.T) {
 		t.Error("usage should state that bundles carry no credentials")
 	}
 }
+
+// Version must be a var, not a const. The Go linker accepts -X only on vars and
+// ignores it silently otherwise, so a const here would ship every release
+// labelled with the development version and stamp that into every bundle
+// manifest — with nothing failing to say so. Taking its address compiles only
+// for a var, which makes this a build-time guard rather than a runtime one.
+func TestVersionIsLinkerOverridable(t *testing.T) {
+	if p := &Version; p == nil || *p == "" {
+		t.Fatal("Version must be a non-empty package-level var")
+	}
+}

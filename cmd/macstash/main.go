@@ -27,7 +27,11 @@ import (
 )
 
 // Version is the macstash release this binary was built from.
-const Version = "0.1.0-dev"
+// Version is overwritten at release time by scripts/release.sh via
+// -ldflags "-X main.Version=...". It must stay a var: the Go linker silently
+// ignores -X on a const, so declaring it const would ship every release
+// labelled 0.1.0-dev, and record that wrong version in every bundle manifest.
+var Version = "0.1.0-dev"
 
 const usage = `macstash — capture a macOS development environment and rebuild it elsewhere
 
