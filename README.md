@@ -59,7 +59,9 @@ This list is the honest part of the README, and it is deliberately long.
 
 ## Structural guarantees
 
-These are properties of the build, not promises in a README:
+These are properties of the build, not promises in a README. The threat model,
+the invariants a change must not break, and how to report a vulnerability are in
+[SECURITY.md](SECURITY.md).
 
 1. **macstash's own code never opens a socket.** Enforced in CI at the import
    graph (`scripts/check-imports.sh`), which fails the build on `net`,

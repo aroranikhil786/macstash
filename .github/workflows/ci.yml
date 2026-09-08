@@ -40,3 +40,11 @@ jobs:
         run: |
           go test ./internal/catalog/ -run 'Catalog|Never|Schema|Scrub' -v
           go test ./internal/classify/ -v
+
+      # A tool that reads every credential store on a machine should not be
+      # running a dependency with a known advisory. There is one dependency, so
+      # this costs seconds.
+      - name: Known vulnerabilities
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
