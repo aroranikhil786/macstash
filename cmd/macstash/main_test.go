@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aroranikhil786/macstash/internal/bundle"
+	"github.com/aroranikhil786/macstash/internal/capture"
 	"github.com/aroranikhil786/macstash/internal/catalog"
 )
 
@@ -418,5 +420,66 @@ func TestUsageStatesTheCredentialPromise(t *testing.T) {
 func TestVersionIsLinkerOverridable(t *testing.T) {
 	if p := &Version; p == nil || *p == "" {
 		t.Fatal("Version must be a non-empty package-level var")
+	}
+}
+
+// appSummaryCounts mirrors the arithmetic cmdInspect prints in its header.
+func appSummaryCounts(apps []bundle.App) (byBrew, store, manual int) {
+	for _, a := range apps {
+		switch {
+		case a.Source == capture.SourceHomebrew || a.Source == capture.SourceSystem:
+		case a.Source == capture.SourceAppStore:
+			store++
+		case a.CaskToken != "":
+			byBrew++
+		default:
+			manual++
+		}
+	}
+	return byBrew, store, manual
+}
+
+// inspect's one-line summary said "7 need manual reinstall" on a bundle whose
+// own detail section said "0 needing a manual download" — it counted every
+// non-Homebrew app as manual, including the seven a single `brew install
+// --cask` would fetch. A summary that contradicts the detail below it sends
+// people hunting for downloads they do not need.
+func TestInspectAppSummaryAgreesWithTheDetailBreakdown(t *testing.T) {
+	apps := []bundle.App{
+		{Name: "Docker", Source: capture.SourceManual, CaskToken: "docker"},
+		{Name: "IntelliJ IDEA", Source: capture.SourceManual, CaskToken: "intellij-idea"},
+		{Name: "GlobalProtect", Source: capture.SourceManual},
+		{Name: "Xcode", Source: capture.SourceAppStore},
+		{Name: "ripgrep", Source: capture.SourceHomebrew},
+		{Name: "Safari", Source: capture.SourceSystem},
+	}
+
+	byBrew, store, manual := appSummaryCounts(apps)
+
+	if byBrew != 2 {
+		t.Errorf("installable by Homebrew = %d, want 2", byBrew)
+	}
+	if store != 1 {
+		t.Errorf("from the App Store = %d, want 1", store)
+	}
+	// Only the one with no cask and no store receipt genuinely needs a human.
+	if manual != 1 {
+		t.Errorf("by hand = %d, want 1 (GlobalProtect)", manual)
+	}
+	// Every app must land in exactly one bucket or a count goes missing.
+	if byBrew+store+manual+2 != len(apps) {
+		t.Errorf("buckets total %d + 2 managed, want %d", byBrew+store+manual, len(apps))
+	}
+}
+
+// An app with a cask must never be counted as needing manual work, whatever
+// else is true of it.
+func TestAppSummaryNeverCallsACaskableAppManual(t *testing.T) {
+	_, _, manual := appSummaryCounts([]bundle.App{
+		{Name: "Arc", Source: capture.SourceManual, CaskToken: "arc"},
+	})
+
+	if manual != 0 {
+		t.Errorf("by hand = %d, want 0 — Homebrew can install it", manual)
 	}
 }

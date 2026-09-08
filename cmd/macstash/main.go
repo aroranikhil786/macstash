@@ -666,13 +666,25 @@ func cmdInspect(f *flags) error {
 	}
 
 	if n := len(man.Applications); n > 0 {
-		manual := 0
+		// Count only what genuinely needs a human. An app without a cask token
+		// is the manual one; an app with a token is a `brew install --cask`
+		// away, and calling it manual sends people hunting for downloads they
+		// do not need. The detailed section below already had this right, which
+		// made the summary line above it a contradiction.
+		manual, byBrew, store := 0, 0, 0
 		for _, a := range man.Applications {
-			if a.Source != capture.SourceHomebrew && a.Source != capture.SourceSystem {
+			switch {
+			case a.Source == capture.SourceHomebrew || a.Source == capture.SourceSystem:
+			case a.Source == capture.SourceAppStore:
+				store++
+			case a.CaskToken != "":
+				byBrew++
+			default:
 				manual++
 			}
 		}
-		fmt.Printf("Apps:       %d (%d need manual reinstall)\n", n, manual)
+		fmt.Printf("Apps:       %d (%d installable by Homebrew, %d from the App Store, %d by hand)\n",
+			n, byBrew, store, manual)
 	}
 	if n := len(man.Repos); n > 0 {
 		fmt.Printf("Repos:      %d (%d with work that exists nowhere else)\n", n, len(capture.RepoRisks(man.Repos)))
