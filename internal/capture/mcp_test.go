@@ -201,7 +201,7 @@ func TestSafePackageAcceptsRealPackageSpecifiers(t *testing.T) {
 func TestSafePackageRejectsCredentialShapes(t *testing.T) {
 	for _, arg := range []string{
 		"sk-ant-api03-fake-not-a-real-key",
-		"ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789",
+		"ghp_fake_not_a_real_token",
 		"github_pat_11ABCDEFG0abcdefghij",
 		"xoxb-fake-fake-not-a-real-token",
 		"AKIAIOSFODNN7EXAMPLE",

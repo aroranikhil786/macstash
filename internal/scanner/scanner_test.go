@@ -5,15 +5,30 @@ import (
 	"testing"
 )
 
+// shape assembles a credential-shaped fixture from fragments.
+//
+// This test has to contain real vendor token formats — recognising them is the
+// thing being tested — which makes the file indistinguishable from a leak to
+// any scanner reading it. The Stripe fixture below opened a secret-scanning
+// alert on this repository the moment it went public, and a standing false
+// positive is worse than none: it is the alert people learn to skim past, and
+// the next one will be real.
+//
+// Joining the fragments at run time means the file contains no matchable
+// literal while Scan still receives a genuine shape. Do not "tidy" these back
+// into single strings.
+func shape(parts ...string) string { return strings.Join(parts, "") }
+
 func TestScanFindsRealCredentialShapes(t *testing.T) {
 	cases := []struct{ name, content, wantRule string }{
+		// AWS's own documented example key, allowlisted by scanners everywhere.
 		{"aws", "AWS_KEY=AKIAIOSFODNN7EXAMPLE\n", "AWS access key ID"},
-		{"github", "export GH=ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789\n", "GitHub token"},
-		{"slack", "SLACK=xoxb-1234567890-abcdefghijkl\n", "Slack token"},
-		{"stripe", "key = sk_live_abcdefghijklmnopqrstuvwx\n", "Stripe live key"},
+		{"github", "export GH=" + shape("ghp", "_", "aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789") + "\n", "GitHub token"},
+		{"slack", "SLACK=" + shape("xoxb", "-", "1234567890-abcdefghijkl") + "\n", "Slack token"},
+		{"stripe", "key = " + shape("sk", "_live_", "abcdefghijklmnopqrstuvwx") + "\n", "Stripe live key"},
 		{"private key", "-----BEGIN RSA PRIVATE KEY-----\n", "private key block"},
-		{"pg url", "DB=postgres://admin:hunter2hunter2@db.internal/app\n", "PostgreSQL URL with password"},
-		{"jwt", "t=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N\n", "JSON Web Token"},
+		{"pg url", "DB=" + shape("postgres", "://", "admin:hunter2hunter2@db.internal/app") + "\n", "PostgreSQL URL with password"},
+		{"jwt", "t=" + shape("eyJhbGciOiJIUzI1NiJ9", ".", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", ".", "dozjgNryP4J3jVmNHl0w5N") + "\n", "JSON Web Token"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -58,7 +73,7 @@ func TestScanFindsHighEntropyAssignment(t *testing.T) {
 
 // The report itself gets pasted into tickets, so it must not reproduce secrets.
 func TestExcerptMasksTheSecret(t *testing.T) {
-	f := Scan([]byte("export GH=ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789\n"), "x")
+	f := Scan([]byte("export GH="+shape("ghp", "_", "aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789")+"\n"), "x")
 	if len(f) == 0 {
 		t.Fatal("no finding")
 	}
