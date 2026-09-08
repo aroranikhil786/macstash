@@ -465,9 +465,30 @@ func printApplications(apps []bundle.App, brewConsulted, verbose bool) {
 		printAppList(byCask, verbose, true)
 	}
 
-	if len(unmanaged) > 0 {
-		fmt.Printf("\nThese %d have no Homebrew cask and must be reinstalled by hand — macstash\nnever downloads from URLs, so it lists them instead:\n", len(unmanaged))
-		printAppList(unmanaged, verbose, false)
+	// Software an employer pushes is not the user's to reinstall. Hand-installing
+	// a VPN client or an endpoint agent produces an unenrolled copy that reports
+	// to nothing, which is worse than not having it.
+	agents := map[string]bool{}
+	for _, n := range capture.EnterpriseAgents(apps) {
+		agents[n] = true
+	}
+	var byIT, byHand []bundle.App
+	for _, a := range unmanaged {
+		if agents[a.Name] {
+			byIT = append(byIT, a)
+		} else {
+			byHand = append(byHand, a)
+		}
+	}
+
+	if len(byIT) > 0 {
+		fmt.Printf("\nThese %d look like software your employer deploys. Do not reinstall them\nby hand — a copy you install yourself is enrolled in nothing:\n", len(byIT))
+		printAppList(byIT, verbose, false)
+	}
+
+	if len(byHand) > 0 {
+		fmt.Printf("\nThese %d have no Homebrew cask and must be reinstalled by hand — macstash\nnever downloads from URLs, so it lists them instead:\n", len(byHand))
+		printAppList(byHand, verbose, false)
 	}
 }
 
@@ -554,6 +575,17 @@ func printRepos(repos []bundle.Repo, unredacted, verbose bool) {
 	atRisk := capture.RepoRisks(repos)
 	fmt.Printf("\nGit repositories: %d found (contents are never captured — remote, branch and\n"+
 		"                  path only, so they can be cloned again)\n", len(repos))
+
+	// Remotes are redacted below, but the paths beside them are not, and a
+	// checkout directory is usually named after the repository. Hiding the host
+	// while printing "inception-k8s-deployment-prod" protects nothing, so say so
+	// rather than implying a safety the output does not have. macstash cannot
+	// know which names matter; the person reading can.
+	if !unredacted {
+		fmt.Println("\n  Remote URLs are hidden below, but the paths are not, and a directory name\n" +
+			"  usually is the repository name. Treat this section as internal: it is a\n" +
+			"  list of what you work on, whatever the URLs say.")
+	}
 
 	if len(atRisk) > 0 {
 		fmt.Printf("\n  %d hold work that exists nowhere else. Deal with these BEFORE you wipe\n  the old machine:\n", len(atRisk))

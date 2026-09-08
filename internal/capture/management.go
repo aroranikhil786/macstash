@@ -2,6 +2,7 @@ package capture
 
 import (
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/aroranikhil786/macstash/internal/bundle"
@@ -80,6 +81,25 @@ func (m Management) Advisory() string {
 		"Continuing — this is your call, not the tool's.\n"
 }
 
+// mdmAgentMarkers name the management tooling itself.
+var mdmAgentMarkers = []string{
+	"Self Service", "Company Portal", "Kandji", "Mosyle", "Addigy", "Jamf", "Intune",
+}
+
+// enterpriseAgentMarkers name software an employer deploys rather than software
+// a person installs: VPN clients, endpoint detection, backup and device agents.
+//
+// This list will always be incomplete — it is the never-list problem again, one
+// vendor behind — which is why it changes the wording rather than the outcome.
+// The apps it misses are still reported; they are just not separated out.
+var enterpriseAgentMarkers = []string{
+	"GlobalProtect", "AnyConnect", "Cisco Secure", "Netskope", "Zscaler", "Prisma",
+	"Defender", "CrowdStrike", "Falcon", "SentinelOne", "Carbon Black", "Cortex",
+	"Trellix", "McAfee", "Symantec", "Sophos", "Tanium", "Rapid7", "Forcepoint",
+	"Okta Verify", "Metallic", "Commvault", "Code42", "CrashPlan", "Absolute",
+	"BeyondTrust", "Privilege", "Nessus", "Qualys",
+}
+
 // ManagedApps returns applications installed under management, which a restore
 // should not try to reinstall itself.
 //
@@ -87,16 +107,37 @@ func (m Management) Advisory() string {
 // update channels, and the MDM will usually reassert its own afterwards. Naming
 // the conflict is more useful than either fighting it or ignoring it.
 func ManagedApps(apps []bundle.App) []string {
+	return matchMarkers(apps, mdmAgentMarkers)
+}
+
+// EnterpriseAgents returns the security, VPN and backup software an employer
+// pushes to a managed machine.
+//
+// These were previously listed under "reinstall these by hand", which is advice
+// nobody should follow: hand-installing your employer's VPN client or endpoint
+// agent produces an unenrolled copy that reports to nothing, and on most
+// estates that is a policy breach rather than a fix. On a real managed Mac the
+// original check caught two of seven — it matched the names of the MDM agents
+// themselves and missed everything they had deployed.
+func EnterpriseAgents(apps []bundle.App) []string {
+	return matchMarkers(apps, enterpriseAgentMarkers)
+}
+
+func matchMarkers(apps []bundle.App, markers []string) []string {
 	var out []string
+	seen := map[string]bool{}
 	for _, a := range apps {
-		if a.Source == SourceAppStore {
+		if a.Source == SourceAppStore || seen[a.Name] {
 			continue
 		}
-		for _, marker := range []string{"Self Service", "Company Portal", "Kandji", "Mosyle", "Addigy"} {
+		for _, marker := range markers {
 			if strings.Contains(a.Name, marker) {
 				out = append(out, a.Name)
+				seen[a.Name] = true
+				break
 			}
 		}
 	}
+	sort.Strings(out)
 	return out
 }
