@@ -24,6 +24,7 @@ import (
 	"github.com/aroranikhil786/macstash/internal/redact"
 	"github.com/aroranikhil786/macstash/internal/restore"
 	"github.com/aroranikhil786/macstash/internal/scanner"
+	"github.com/aroranikhil786/macstash/internal/selection"
 )
 
 // Version is the macstash release this binary was built from.
@@ -65,6 +66,9 @@ Flags:
                       (off by default: it downloads and installs GUI software)
   --clone-repos       clone the recorded repositories during restore (off by
                       default: needs your SSH key and any VPN to be in place)
+  --select            open a selection file in $EDITOR and prune what is
+                      captured or restored: apps, repos, packages, configs
+  --selection <path>  reuse a selection file saved earlier, without an editor
   --include-launch-agents   restore LaunchAgents (background programs; off by
                       default because they run code at every login)
   --verbose           list every file
@@ -91,6 +95,8 @@ type flags struct {
 	installToolchains bool
 	installApps       bool
 	cloneRepos        bool
+	selectItems       bool
+	selectionFile     string
 	prune             bool
 	to                string
 	launchAgents      bool
@@ -127,6 +133,14 @@ func parse(argv []string) (*flags, error) {
 			f.installApps = true
 		case "--clone-repos":
 			f.cloneRepos = true
+		case "--select":
+			f.selectItems = true
+		case "--selection":
+			if i+1 >= len(argv) {
+				return nil, fmt.Errorf("--selection needs a path to a selection file")
+			}
+			i++
+			f.selectionFile = argv[i]
 		case "--prune":
 			f.prune = true
 		case "--to":
@@ -310,6 +324,20 @@ func cmdCapture(f *flags) error {
 		fmt.Fprintln(os.Stderr, "note: Homebrew is not installed, so no Brewfile was captured.")
 	}
 	plan.Brew = brew
+
+	// Selection runs after the Brewfile dump so formulae and casks can be pruned
+	// too, and before anything is written so an abort costs nothing.
+	if f.selectItems || f.selectionFile != "" {
+		doc := plan.SelectionDocument()
+		chosen, err := resolveSelection(doc, f, filepath.Join(home, ".macstash"))
+		if err != nil {
+			return err
+		}
+		plan.ApplySelection(chosen)
+		before, total := doc.Counts()
+		after, _ := chosen.Counts()
+		fmt.Printf("Selection: keeping %d of %d items (%d excluded).\n", after, total, before-after)
+	}
 
 	out := f.out
 	if out == "" {
@@ -712,6 +740,21 @@ func cmdRestore(f *flags) error {
 
 	p.Filter(f.only, f.skip)
 
+	// Selection runs after --only/--skip so the file reflects what is actually
+	// on the table, and before the plan is printed so the counts are honest.
+	selectedApps, selectedRepos := p.Manifest.Applications, p.Manifest.Repos
+	if f.selectItems || f.selectionFile != "" {
+		doc := restore.SelectionDocument(p, home)
+		chosen, err := resolveSelection(doc, f, filepath.Join(home, ".macstash"))
+		if err != nil {
+			return err
+		}
+		selectedApps, selectedRepos = restore.ApplySelection(p, chosen)
+		if s := restore.Summary(chosen); s != "" {
+			fmt.Println(s)
+		}
+	}
+
 	if len(p.BlockedApps) > 0 {
 		fmt.Println("These applications are running and rewrite their own configuration when")
 		fmt.Println("they quit, so restoring underneath them would be silently undone:")
@@ -766,14 +809,14 @@ func cmdRestore(f *flags) error {
 		p.RestoreToolchains(os.Stdout, false)
 		p.RestoreExtensions(os.Stdout, false)
 		if f.installApps {
-			if err := restore.InstallApps(p.Manifest.Applications, false, os.Stdout); err != nil {
+			if err := restore.InstallApps(selectedApps, false, os.Stdout); err != nil {
 				return err
 			}
 		} else {
-			printAppInstallHint(p.Manifest.Applications)
+			printAppInstallHint(selectedApps)
 		}
 		if f.cloneRepos {
-			if err := restore.CloneRepos(home, p.Manifest.Repos, false, os.Stdout); err != nil {
+			if err := restore.CloneRepos(home, selectedRepos, false, os.Stdout); err != nil {
 				return err
 			}
 		}
@@ -804,7 +847,7 @@ func cmdRestore(f *flags) error {
 		}
 	}
 	if f.installApps {
-		if err := restore.InstallApps(p.Manifest.Applications, true, os.Stdout); err != nil {
+		if err := restore.InstallApps(selectedApps, true, os.Stdout); err != nil {
 			return err
 		}
 	}
@@ -834,16 +877,16 @@ func cmdRestore(f *flags) error {
 	// macstash deliberately never captured, so it is the most likely to fail and
 	// the least damaging to fail late.
 	if f.cloneRepos {
-		if err := restore.CloneRepos(home, p.Manifest.Repos, true, os.Stdout); err != nil {
+		if err := restore.CloneRepos(home, selectedRepos, true, os.Stdout); err != nil {
 			return err
 		}
-	} else if n := len(p.Manifest.Repos); n > 0 {
+	} else if n := len(selectedRepos); n > 0 {
 		fmt.Printf("\n%d repository(ies) recorded. `macstash clone %s` clones them, or\n"+
 			"re-run restore with --clone-repos.\n", n, f.args[0])
 	}
 
 	if !f.installApps {
-		printAppInstallHint(p.Manifest.Applications)
+		printAppInstallHint(selectedApps)
 	}
 	offerBundleDeletion(f.args[0], f.yes)
 
@@ -869,6 +912,41 @@ func cmdRestore(f *flags) error {
 // checkCloudSync refuses to drop a bundle into a folder that syncs to somebody
 // else's servers. A bundle is a concentrated picture of one machine; uploading it
 // is not a decision to make by accident.
+// resolveSelection turns --select or --selection into a chosen document.
+//
+// The file is written under ~/.macstash rather than a temporary directory so it
+// survives the run: a selection is worth keeping, and after a parse error the
+// user needs somewhere to go and fix it.
+func resolveSelection(doc selection.Document, f *flags, dir string) (selection.Document, error) {
+	if doc.Empty() {
+		return doc, nil
+	}
+	var chosen selection.Document
+	var err error
+	if f.selectionFile != "" {
+		chosen, err = selection.Load(f.selectionFile, doc)
+	} else {
+		chosen, err = selection.Edit(doc, dir)
+	}
+	if err == selection.ErrCancelled {
+		return selection.Document{}, errNothingSelected
+	}
+	if err != nil {
+		return selection.Document{}, err
+	}
+	// A saved file that selects nothing means the same as an emptied one. Both
+	// reach here; without this the --selection path would quietly perform a
+	// restore that writes nothing and report it as success.
+	if selected, _ := chosen.Counts(); selected == 0 {
+		return selection.Document{}, errNothingSelected
+	}
+	return chosen, nil
+}
+
+var errNothingSelected = fmt.Errorf(
+	"nothing was left selected, so nothing was done.\n" +
+		"Emptying the selection file is the documented way to cancel; re-run to try again")
+
 func checkCloudSync(home, out string, force bool) error {
 	abs, err := filepath.Abs(out)
 	if err != nil {

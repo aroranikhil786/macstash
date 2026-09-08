@@ -105,6 +105,34 @@ have it.
 Flags: `--plan`, `--apply`, `--only <ids>`, `--skip <ids>`, `--yes`, `--verbose`,
 `-o <path>`, `--force`, `--from-other-user`, `--unredacted`, `--deep`.
 
+### Choosing what to carry, and what to apply
+
+`--select` opens a file in `$EDITOR` listing everything on the table. Comment a
+line out, or delete it, and that item is left behind:
+
+```
+[applications]
+  IntelliJ IDEA        2026.2.1  (cask: intellij-idea)
+# MemoryAnalyzer       1.16.1     <- excluded
+
+[repositories]
+  ~/code/service       3 unpushed
+```
+
+It works on both ends and covers configs, applications, repositories, Homebrew
+formulae and casks, editor extensions, global packages and MCP servers. The file
+is kept at `~/.macstash/selection.conf`, so `--selection <path>` replays it later
+without an editor.
+
+Prefer `restore --select` for pruning applications. A bundle carries the full
+list for almost nothing, and choosing at restore is reversible — pruning at
+capture is not, because changing your mind means going back to a machine that
+may already be wiped. Capture-time selection is for what you would rather not
+record at all.
+
+An unrecognised line is an error rather than a silent exclusion, and emptying the
+file cancels the run.
+
 Restore does the safe things by default. The three phases that install software
 or reach the network are opt-in, because each one is long, unattended, and worth
 choosing deliberately:

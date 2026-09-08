@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -180,4 +181,60 @@ func formatCounts(b bundle.Brew) string {
 	return strconv.Itoa(b.Formulae) + " formulae, " +
 		strconv.Itoa(b.Casks) + " casks, " +
 		strconv.Itoa(b.Taps) + " taps"
+}
+
+// brewLine matches one Brewfile declaration: brew "name", cask "name", tap "x/y".
+var brewLine = regexp.MustCompile(`^\s*(brew|cask|tap)\s+"([^"]+)"`)
+
+// parseBrewfile returns the formula and cask names a Brewfile declares.
+func parseBrewfile(content []byte) (formulae, casks []string) {
+	for _, line := range strings.Split(string(content), "\n") {
+		m := brewLine.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		switch m[1] {
+		case "brew":
+			formulae = append(formulae, m[2])
+		case "cask":
+			casks = append(casks, m[2])
+		}
+	}
+	return formulae, casks
+}
+
+// filterBrewfile rewrites a Brewfile keeping only the selected entries, and
+// recomputes the counts so the cross-check still describes the file.
+//
+// The counts matter: they are what a later restore and `inspect` compare
+// against, and leaving them describing the pre-filter file would reintroduce
+// exactly the silent mismatch the dump validation exists to catch.
+func filterBrewfile(content []byte, formulae map[string]bool, haveFormulae bool,
+	casks map[string]bool, haveCasks bool) ([]byte, bundle.Brew) {
+
+	var out []string
+	var counts bundle.Brew
+	for _, line := range strings.Split(string(content), "\n") {
+		m := brewLine.FindStringSubmatch(line)
+		if m == nil {
+			out = append(out, line)
+			continue
+		}
+		switch m[1] {
+		case "brew":
+			if haveFormulae && !formulae[m[2]] {
+				continue
+			}
+			counts.Formulae++
+		case "cask":
+			if haveCasks && !casks[m[2]] {
+				continue
+			}
+			counts.Casks++
+		case "tap":
+			counts.Taps++
+		}
+		out = append(out, line)
+	}
+	return []byte(strings.Join(out, "\n")), counts
 }

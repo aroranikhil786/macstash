@@ -37,6 +37,7 @@ func TestParseSetsEachBooleanFlag(t *testing.T) {
 		{"--install-toolchains", func(f *flags) bool { return f.installToolchains }},
 		{"--install-apps", func(f *flags) bool { return f.installApps }},
 		{"--clone-repos", func(f *flags) bool { return f.cloneRepos }},
+		{"--select", func(f *flags) bool { return f.selectItems }},
 		{"--include-launch-agents", func(f *flags) bool { return f.launchAgents }},
 		{"--prune", func(f *flags) bool { return f.prune }},
 		{"--verbose", func(f *flags) bool { return f.verbose }},
@@ -62,6 +63,7 @@ func TestParseDefaultsEverythingOff(t *testing.T) {
 		"installToolchains": f.installToolchains,
 		"installApps":       f.installApps,
 		"cloneRepos":        f.cloneRepos,
+		"selectItems":       f.selectItems,
 		"launchAgents":      f.launchAgents,
 		"unredacted":        f.unredacted,
 	} {
@@ -88,7 +90,7 @@ func TestParseReadsValueFlags(t *testing.T) {
 // A value flag at the end of argv must error rather than silently swallow the
 // next command or leave an empty value behind.
 func TestParseRejectsValueFlagsWithNoValue(t *testing.T) {
-	for _, arg := range []string{"-o", "--out", "--to", "--only", "--skip"} {
+	for _, arg := range []string{"-o", "--out", "--to", "--only", "--skip", "--selection"} {
 		if _, err := parse([]string{arg}); err == nil {
 			t.Errorf("%s with no value should be an error", arg)
 		}
@@ -382,7 +384,7 @@ func TestUsageDocumentsEveryFlagTheParserAccepts(t *testing.T) {
 	for _, flag := range []string{
 		"--plan", "--apply", "-o", "--force", "--from-other-user", "--unredacted",
 		"--only", "--skip", "--yes", "--install-toolchains",
-		"--install-apps", "--clone-repos",
+		"--install-apps", "--clone-repos", "--select", "--selection",
 		"--include-launch-agents", "--verbose",
 	} {
 		if !strings.Contains(usage, flag) {
