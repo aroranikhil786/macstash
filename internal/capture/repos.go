@@ -75,8 +75,12 @@ func ScanRepos(home string, maxDepth int) []bundle.Repo {
 func inspectRepo(home, dir string) bundle.Repo {
 	r := bundle.Repo{Path: shortPath(home, dir)}
 
-	if out, err := git(dir, "remote", "get-url", "origin"); err == nil && out != "" {
-		r.Remote = out
+	// "origin" is a convention, not a guarantee. A repo created with
+	// `git remote add github ...`, or one where origin was renamed, has a
+	// perfectly good remote under another name — reporting it as having none
+	// both cries wolf in the at-risk list and makes `clone` refuse to fetch it.
+	if url, ok := primaryRemote(dir); ok {
+		r.Remote = url
 	} else {
 		r.NoRemote = true
 	}
@@ -86,12 +90,43 @@ func inspectRepo(home, dir string) bundle.Repo {
 	if out, err := git(dir, "status", "--porcelain"); err == nil && out != "" {
 		r.Dirty = true
 	}
+	// Count commits that exist on no remote. `rev-list @{u}..` only works when
+	// the current branch has an upstream, and a branch made with `git checkout
+	// -b` and never pushed has none — so the command fails, the count silently
+	// stays zero, and a branch holding a month of work is reported as safe. That
+	// is precisely the work this report exists to stop someone from wiping.
 	if out, err := git(dir, "rev-list", "@{u}..", "--count"); err == nil {
 		if n, convErr := strconv.Atoi(out); convErr == nil {
 			r.Unpushed = n
 		}
+	} else {
+		r.NoUpstream = true
+		// Fall back to "on a local branch but on no remote", which needs no
+		// upstream and also covers detached HEAD.
+		if out, err := git(dir, "rev-list", "--branches", "--not", "--remotes", "--count"); err == nil {
+			if n, convErr := strconv.Atoi(out); convErr == nil {
+				r.Unpushed = n
+			}
+		}
 	}
 	return r
+}
+
+// primaryRemote returns a remote URL, preferring origin but accepting any.
+func primaryRemote(dir string) (string, bool) {
+	if url, err := git(dir, "remote", "get-url", "origin"); err == nil && url != "" {
+		return url, true
+	}
+	names, err := git(dir, "remote")
+	if err != nil {
+		return "", false
+	}
+	for _, name := range lines(names) {
+		if url, err := git(dir, "remote", "get-url", name); err == nil && url != "" {
+			return url, true
+		}
+	}
+	return "", false
 }
 
 func git(dir string, args ...string) (string, error) {

@@ -10,7 +10,6 @@
 package scrub
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -111,13 +110,35 @@ func redactMatch(content []byte, pattern string) ([]byte, int, error) {
 	}
 	count := 0
 	out := re.ReplaceAllFunc(content, func(m []byte) []byte {
-		sub := re.FindSubmatch(m)
-		if len(sub) < 2 {
-			count++
+		count++
+		// Splice at the capture group's byte offsets rather than searching for
+		// its value. A substring search replaces the FIRST occurrence of those
+		// bytes, which is not necessarily the captured one: given
+		// https://ghp_TOKEN:ghp_TOKEN@host the username copy is replaced and the
+		// real credential survives in the password position. Any value that also
+		// appears earlier in the match hits the same trap.
+		idx := re.FindSubmatchIndex(m)
+		if len(idx) < 4 || idx[2] < 0 {
 			return []byte(Placeholder)
 		}
-		count++
-		return bytes.Replace(m, sub[1], []byte(Placeholder), 1)
+		// Every capture group is redacted, not just the first. In a URL of the
+		// form user:password@host either half can be the secret — GitHub's own
+		// scheme is https://<TOKEN>:x-oauth-basic@ — and the pattern cannot know
+		// which. Redacting one half and trusting the other is how a token ends up
+		// in a bundle that reports a successful scrub.
+		out := append([]byte(nil), m...)
+		for g := len(idx)/2 - 1; g >= 1; g-- {
+			start, end := idx[2*g], idx[2*g+1]
+			if start < 0 || end < start {
+				continue
+			}
+			spliced := make([]byte, 0, len(out)+len(Placeholder))
+			spliced = append(spliced, out[:start]...)
+			spliced = append(spliced, Placeholder...)
+			spliced = append(spliced, out[end:]...)
+			out = spliced
+		}
+		return out
 	})
 	return out, count, nil
 }

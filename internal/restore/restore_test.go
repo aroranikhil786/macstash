@@ -230,3 +230,66 @@ func TestPreflightRefusesForeignBundle(t *testing.T) {
 		t.Errorf("--from-other-user did not permit the restore: %v", err)
 	}
 }
+
+// A personal script restored without its execute bit fails the first time the
+// user runs it — weeks after the restore reported success. The ~/bin catalog
+// entry exists to carry exactly these files.
+func TestRestorePreservesExecutableBit(t *testing.T) {
+	home := t.TempDir()
+	script := filepath.Join(home, ".local", "bin", "deploy")
+	if err := os.MkdirAll(filepath.Dir(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho deploying\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	archive := buildBundle(t, home)
+	dest := t.TempDir()
+
+	p, cleanup, err := Prepare(archive, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if err := p.Apply(dest, "run1", io.Discard); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(filepath.Join(dest, ".local", "bin", "deploy"))
+	if err != nil {
+		t.Fatalf("script was not restored: %v", err)
+	}
+	if info.Mode().Perm()&0o100 == 0 {
+		t.Errorf("restored script is not executable (mode %v); running it would fail", info.Mode().Perm())
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		t.Errorf("restored script is group/world accessible: %v", info.Mode().Perm())
+	}
+}
+
+// A plain config file must not become executable.
+func TestRestoreDoesNotAddExecuteBitToConfig(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte("export EDITOR=vim\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archive := buildBundle(t, home)
+	dest := t.TempDir()
+
+	p, cleanup, err := Prepare(archive, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if err := p.Apply(dest, "run1", io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dest, ".zshrc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o111 != 0 {
+		t.Errorf(".zshrc became executable: %v", info.Mode().Perm())
+	}
+}

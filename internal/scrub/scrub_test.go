@@ -74,7 +74,7 @@ func TestGitconfigRedactsInlineTokenInPlace(t *testing.T) {
 `
 	rules := []Rule{{
 		Kind:    RedactMatch,
-		Pattern: `https://[^@/:]+:([^@/]+)@`,
+		Pattern: `https://([^@/:]+):([^@/]+)@`,
 		Reason:  "inline credential in git URL",
 	}}
 	out, records, err := Apply([]byte(in), rules, ".gitconfig")
@@ -91,7 +91,9 @@ func TestGitconfigRedactsInlineTokenInPlace(t *testing.T) {
 	if !strings.Contains(got, "insteadOf = https://github.com/") {
 		t.Errorf("the insteadOf rule was lost:\n%s", got)
 	}
-	if !strings.Contains(got, "x-access-token") {
+	// Both halves are redacted, because either can hold the secret. What must
+	// survive is the surrounding structure.
+	if !strings.Contains(got, "@github.com/") {
 		t.Errorf("structure of the url line was destroyed:\n%s", got)
 	}
 	if len(records) != 1 {
@@ -120,5 +122,66 @@ func TestMalformedJSONIsAnErrorNotSilentPassthrough(t *testing.T) {
 	rules := []Rule{{Kind: DropJSONKey, Key: "auths", Reason: "docker credentials"}}
 	if _, _, err := Apply([]byte("{not json"), rules, ".docker/config.json"); err == nil {
 		t.Fatal("malformed JSON scrubbed without error; a token could pass through unscrubbed")
+	}
+}
+
+// The captured value can also appear earlier in the match. Replacing by
+// substring search then redacts the wrong copy and leaves the real credential
+// in place — a silent leak that the scrub record still counts as a success.
+func TestRedactReplacesTheCapturedBytesNotTheFirstMatch(t *testing.T) {
+	rule := []Rule{{
+		Kind:    RedactMatch,
+		Pattern: `https://([^@/:]+):([^@/]+)@`,
+		Reason:  "inline credential in a git URL rewrite",
+	}}
+
+	cases := []struct{ name, in, secret string }{
+		{
+			// Generic PATs are routinely pasted into both halves.
+			name:   "same token as username and password",
+			in:     `[url "https://ghp_TOKEN123456:ghp_TOKEN123456@github.com/"]`,
+			secret: "ghp_TOKEN123456",
+		},
+		{
+			// The password's bytes occur earlier inside "https".
+			name:   "password is a substring appearing earlier in the match",
+			in:     `[url "https://user:http@github.com/"]`,
+			secret: "",
+		},
+		{
+			// GitHub's own scheme puts the token in the username position.
+			name:   "token in the username half",
+			in:     `[url "https://ghp_REALTOKEN99:x-oauth-basic@github.com/"]`,
+			secret: "ghp_REALTOKEN99",
+		},
+		{
+			name:   "password shares a prefix with the username",
+			in:     `[url "https://tok:tok123456@github.com/"]`,
+			secret: "tok123456",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, records, err := Apply([]byte(c.in), rule, ".gitconfig")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := string(out)
+			if c.secret != "" && strings.Contains(got, c.secret) {
+				t.Errorf("credential %q survived the scrub: %s", c.secret, got)
+			}
+			if !strings.Contains(got, Placeholder) {
+				t.Errorf("nothing was redacted: %s", got)
+			}
+			// The placeholder must land in the password position, immediately
+			// before the @.
+			if !strings.Contains(got, Placeholder+"@") {
+				t.Errorf("redaction landed in the wrong position: %s", got)
+			}
+			if len(records) != 1 {
+				t.Errorf("records = %+v, want exactly 1", records)
+			}
+		})
 	}
 }

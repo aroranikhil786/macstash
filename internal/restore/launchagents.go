@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/aroranikhil786/macstash/internal/bundle"
+	"github.com/aroranikhil786/macstash/internal/classify"
 )
 
 // RestoreLaunchAgents writes background jobs, but only when explicitly asked.
@@ -18,6 +19,27 @@ import (
 // many of them were installed by applications rather than chosen by the person
 // running this. The full command line is printed for each, because "com.acme.
 // updater" tells you nothing and the actual argv tells you everything.
+// validAgentFile reports whether a manifest-supplied LaunchAgent file name is a
+// plain basename that stays inside the LaunchAgents directory.
+func validAgentFile(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	if strings.ContainsRune(name, filepath.Separator) || strings.ContainsRune(name, '/') {
+		return false
+	}
+	if strings.ContainsRune(name, 0) {
+		return false
+	}
+	if filepath.Clean(name) != name {
+		return false
+	}
+	if !strings.HasSuffix(name, ".plist") {
+		return false
+	}
+	return true
+}
+
 func RestoreLaunchAgents(home string, agents []bundle.LaunchAgent, staging string, include, apply bool, out io.Writer) error {
 	if len(agents) == 0 {
 		return nil
@@ -61,6 +83,21 @@ func RestoreLaunchAgents(home string, agents []bundle.LaunchAgent, staging strin
 	}
 	written := 0
 	for _, a := range agents {
+		// The file name comes out of the manifest, which is attacker-controlled
+		// for any bundle the user did not create. filepath.Join cleans ".."
+		// segments rather than rejecting them, so an unvalidated name escapes
+		// both the staging tree and ~/Library/LaunchAgents — reaching, among
+		// other things, VS Code's settings.json, which is a code-execution
+		// surface. A genuine name always comes from os.ReadDir and is a bare
+		// basename, so this rejects nothing legitimate.
+		if !validAgentFile(a.File) {
+			fmt.Fprintf(out, "  REFUSED %s — not a plain file name\n", a.File)
+			continue
+		}
+		if never, reason := classify.IsNever("Library/LaunchAgents/" + a.File); never {
+			fmt.Fprintf(out, "  REFUSED %s — %s\n", a.File, reason)
+			continue
+		}
 		data, err := os.ReadFile(filepath.Join(staging, "launchagents", a.File))
 		if err != nil {
 			continue

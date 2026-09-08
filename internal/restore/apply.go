@@ -33,9 +33,12 @@ const (
 
 // Action is one planned change.
 type Action struct {
-	Rel    string
-	Kind   ActionKind
-	Class  classify.Class
+	Rel   string
+	Kind  ActionKind
+	Class classify.Class
+	// Mode is the owner permission recorded at capture. Without it a restored
+	// script arrives without its execute bit and fails the first time it runs.
+	Mode   uint32
 	Reason string
 }
 
@@ -130,7 +133,7 @@ func Prepare(archive, home string) (*Plan, func(), error) {
 				kind = Overwrite
 			}
 		}
-		p.Actions = append(p.Actions, Action{Rel: item.Rel, Kind: kind, Class: item.Class})
+		p.Actions = append(p.Actions, Action{Rel: item.Rel, Kind: kind, Class: item.Class, Mode: item.Mode})
 	}
 	return p, cleanup, nil
 }
@@ -206,7 +209,20 @@ func (p *Plan) Apply(home, stamp string, out io.Writer) error {
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			return err
 		}
-		if err := os.WriteFile(target, content, 0o600); err != nil {
+		// Honour the captured mode. ~/bin and ~/.local/bin exist in the catalog
+		// precisely to carry personal scripts across, and a script restored
+		// without its execute bit is a permission-denied error the first time
+		// the user reaches for it — weeks after the restore reported success.
+		mode := os.FileMode(a.Mode).Perm() & 0o700
+		if mode == 0 {
+			mode = 0o600
+		}
+		if err := os.WriteFile(target, content, mode); err != nil {
+			return err
+		}
+		// WriteFile only applies mode when it creates the file, so an overwrite
+		// keeps whatever permissions were already there.
+		if err := os.Chmod(target, mode); err != nil {
 			return err
 		}
 		written++

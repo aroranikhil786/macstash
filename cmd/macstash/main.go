@@ -54,6 +54,9 @@ Flags:
   --only <ids>        restrict to these catalog entries (comma-separated)
   --skip <ids>        exclude these catalog entries
   --yes               do not pause for confirmation
+  --install-toolchains  reinstall global npm/gem/pipx/cargo packages during
+                      restore (off by default: it is a long unattended,
+                      network-bound phase; the report lists the commands)
   --include-launch-agents   restore LaunchAgents (background programs; off by
                       default because they run code at every login)
   --verbose           list every file
@@ -70,21 +73,22 @@ func main() {
 }
 
 type flags struct {
-	plan          bool
-	apply         bool
-	force         bool
-	fromOtherUser bool
-	unredacted    bool
-	yes           bool
-	deep          bool
-	prune         bool
-	to            string
-	launchAgents  bool
-	only          []string
-	skip          []string
-	verbose       bool
-	out           string
-	args          []string
+	plan              bool
+	apply             bool
+	force             bool
+	fromOtherUser     bool
+	unredacted        bool
+	yes               bool
+	deep              bool
+	installToolchains bool
+	prune             bool
+	to                string
+	launchAgents      bool
+	only              []string
+	skip              []string
+	verbose           bool
+	out               string
+	args              []string
 }
 
 func parse(argv []string) (*flags, error) {
@@ -107,6 +111,8 @@ func parse(argv []string) (*flags, error) {
 			f.launchAgents = true
 		case "--deep":
 			f.deep = true
+		case "--install-toolchains":
+			f.installToolchains = true
 		case "--prune":
 			f.prune = true
 		case "--to":
@@ -143,6 +149,49 @@ func parse(argv []string) (*flags, error) {
 		}
 	}
 	return f, nil
+}
+
+// filterEntries applies --only and --skip to the catalog.
+//
+// These were previously accepted by capture and silently ignored, so someone
+// narrowing a bundle deliberately — the likeliest reason to reach for the flag —
+// got a full-catalog bundle and no warning. An unknown id is an error rather
+// than a no-op, because a typo would otherwise widen the capture without saying
+// so.
+func filterEntries(entries []catalog.Entry, only, skip []string) ([]catalog.Entry, error) {
+	if len(only) == 0 && len(skip) == 0 {
+		return entries, nil
+	}
+	known := map[string]bool{}
+	for _, e := range entries {
+		known[e.ID] = true
+	}
+	for _, id := range append(append([]string{}, only...), skip...) {
+		if !known[id] {
+			return nil, fmt.Errorf("no catalog entry %q (try `macstash catalog`)", id)
+		}
+	}
+
+	inOnly := map[string]bool{}
+	for _, id := range only {
+		inOnly[id] = true
+	}
+	inSkip := map[string]bool{}
+	for _, id := range skip {
+		inSkip[id] = true
+	}
+
+	var out []catalog.Entry
+	for _, e := range entries {
+		if len(inOnly) > 0 && !inOnly[e.ID] {
+			continue
+		}
+		if inSkip[e.ID] {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, nil
 }
 
 // splitList parses a comma-separated flag value.
@@ -213,6 +262,10 @@ func cmdCapture(f *flags) error {
 	if err != nil {
 		return err
 	}
+	entries, err = filterEntries(entries, f.only, f.skip)
+	if err != nil {
+		return err
+	}
 	plan, err := capture.Scan(home, entries)
 	if err != nil {
 		return err
@@ -223,6 +276,11 @@ func cmdCapture(f *flags) error {
 	}
 
 	if f.plan {
+		// Read, scrub and scan without writing, so the plan reports the same
+		// scanner findings a real capture would.
+		if _, err := plan.Analyse(); err != nil {
+			return err
+		}
 		printCapturePlan(plan, f.unredacted, f.verbose)
 		fmt.Println("\nNothing was written. Re-run without --plan to create the bundle.")
 		return nil
@@ -415,6 +473,9 @@ func printRepos(repos []bundle.Repo, unredacted, verbose bool) {
 			if r.Unpushed > 0 {
 				why = append(why, fmt.Sprintf("%d unpushed commit(s)", r.Unpushed))
 			}
+			if r.NoUpstream && !r.NoRemote {
+				why = append(why, "branch tracks no upstream")
+			}
 			fmt.Printf("    %-46s %s\n", r.Path, strings.Join(why, ", "))
 		}
 	}
@@ -554,13 +615,22 @@ func cmdRestore(f *flags) error {
 		}
 	}
 
+	// A fresh Mac — the tool's whole scenario — has no Homebrew yet. Aborting
+	// here used to skip the entire restore: no dotfiles, no prefs, no manifest,
+	// so `doctor` afterwards reported that no restore had ever happened. Nothing
+	// below this point needs brew, and every step is idempotent, so the right
+	// move is to say so and carry on. The user installs brew and re-runs to pick
+	// up the packages.
+	skipBrewfile := false
 	if p.HasBrewfile {
 		if err := restore.CheckHomebrew(p.Manifest); err != nil {
 			fmt.Print("\n" + restore.HomebrewInstallMessage)
-			return nil
+			fmt.Println("Continuing with everything that does not need Homebrew.")
+			skipBrewfile = true
+		} else {
+			fmt.Printf("\nBrewfile: %d formulae, %d casks, %d taps to install\n",
+				p.Manifest.Brewfile.Formulae, p.Manifest.Brewfile.Casks, p.Manifest.Brewfile.Taps)
 		}
-		fmt.Printf("\nBrewfile: %d formulae, %d casks, %d taps to install\n",
-			p.Manifest.Brewfile.Formulae, p.Manifest.Brewfile.Casks, p.Manifest.Brewfile.Taps)
 	}
 
 	if !f.apply {
@@ -588,7 +658,7 @@ func cmdRestore(f *flags) error {
 	restore.EnsureXcodeTools(os.Stdout)
 	restore.EnsureRosetta(os.Stdout)
 
-	if p.HasBrewfile {
+	if p.HasBrewfile && !skipBrewfile {
 		if err := p.InstallBrewfile(os.Stdout); err != nil {
 			return err
 		}
@@ -603,7 +673,7 @@ func cmdRestore(f *flags) error {
 		return err
 	}
 	p.RestoreExtensions(os.Stdout, true)
-	p.RestoreToolchains(os.Stdout, true)
+	p.RestoreToolchains(os.Stdout, f.installToolchains)
 
 	if err := p.WriteManifest(home); err != nil {
 		return fmt.Errorf("writing %s: %w", restore.ManifestPath, err)

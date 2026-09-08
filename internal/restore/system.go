@@ -61,9 +61,15 @@ func (p *Plan) RestorePrefs(out io.Writer) error {
 	if err != nil {
 		return nil // no prefs in this bundle
 	}
-	blocked := map[string]bool{}
+	// Map preference domains back to the catalog entries that own them, so a
+	// blocked app's domain can be recognised. The blocked set is keyed by
+	// display name ("iTerm2") while a domain is a bundle identifier
+	// ("com.googlecode.iterm2"), so comparing the two directly never matches.
+	blockedDomain := map[string]string{}
 	for _, b := range p.BlockedApps {
-		blocked[strings.ToLower(b.Name)] = true
+		for _, d := range p.Manifest.System.PrefOwners[b.Entry] {
+			blockedDomain[d] = b.Name
+		}
 	}
 
 	fmt.Fprintln(out, "\nImporting preferences:")
@@ -72,6 +78,14 @@ func (p *Plan) RestorePrefs(out io.Writer) error {
 			continue
 		}
 		domain := strings.TrimSuffix(e.Name(), ".plist")
+
+		// Importing a domain under a running app is undone the moment that app
+		// quits and rewrites its preferences from memory. Reporting "imported"
+		// and then losing it hours later is worse than refusing now.
+		if app, isBlocked := blockedDomain[domain]; isBlocked {
+			fmt.Fprintf(out, "  %-34s REFUSED — %s is running\n", domain, app)
+			continue
+		}
 		cmd := exec.Command("defaults", "import", domain, filepath.Join(dir, e.Name()))
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(out, "  %-34s failed: %v\n", domain, err)
@@ -146,6 +160,13 @@ func installArgs(tool, version string) []string {
 }
 
 // RestoreToolchains reinstalls globally installed packages.
+//
+// This is opt-in rather than automatic. A real machine had 122 gems and 8 npm
+// globals recorded; reinstalling those is an unbounded, unattended, network-bound
+// phase in the middle of a restore, where a single hung package stalls
+// everything and the user has no signal about what is happening. Printing the
+// list and the exact command is more useful than doing it silently, and someone
+// who does want it automated passes --install-toolchains.
 func (p *Plan) RestoreToolchains(out io.Writer, apply bool) {
 	t := p.Manifest.System.Toolchains
 	if len(t) == 0 {
@@ -162,14 +183,22 @@ func (p *Plan) RestoreToolchains(out io.Writer, apply bool) {
 	for _, m := range managers {
 		pkgs := t[m]
 		fmt.Fprintf(out, "  %-8s %d package(s): %s\n", m, len(pkgs), strings.Join(truncate(pkgs, 5), ", "))
-		if !apply || !commandAvailable(m) {
+		if !apply {
 			continue
 		}
-		for _, pkg := range pkgs {
-			if args := toolchainInstallArgs(m, pkg); args != nil {
-				cmd := exec.Command(args[0], args[1:]...)
-				_ = cmd.Run()
+		if !commandAvailable(m) {
+			fmt.Fprintf(out, "  %-8s (%s is not installed here)\n", "", m)
+			continue
+		}
+		fmt.Fprintf(out, "  %-8s installing %d package(s), this reaches the network...\n", "", len(pkgs))
+		for i, pkg := range pkgs {
+			args := toolchainInstallArgs(m, pkg)
+			if args == nil {
+				continue
 			}
+			fmt.Fprintf(out, "  %-8s [%d/%d] %s\n", "", i+1, len(pkgs), pkg)
+			cmd := exec.Command(args[0], args[1:]...)
+			_ = cmd.Run() // individual failures are the package manager's to report
 		}
 	}
 }

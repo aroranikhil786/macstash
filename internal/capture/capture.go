@@ -59,6 +59,9 @@ type Plan struct {
 	LaunchAgents []bundle.LaunchAgent
 	// Management is the corporate-device advisory, if any.
 	Management Management
+	// analysed caches the read/scrub/scan pass so --plan and a real capture do
+	// not repeat it.
+	analysed []prepared
 	// BrewConsulted is false when brew could not be run, in which case the
 	// application inventory cannot tell Homebrew casks from hand-installed apps.
 	BrewConsulted bool
@@ -79,14 +82,26 @@ func Scan(home string, entries []catalog.Entry) (*Plan, error) {
 		found := false
 		for _, cp := range e.Capture.Paths {
 			abs := expand(home, cp.Path)
-			info, err := os.Lstat(abs)
+			// Stat, not Lstat. Managing dotfiles with stow, a chezmoi source
+			// tree or a hand-rolled repo makes ~/.config/nvim a symlink to a
+			// directory — which is the norm for exactly the people this tool is
+			// for. Lstat reports that as a non-directory, the walk is skipped,
+			// and the entry still counts as detected: the report claims success
+			// while the bundle silently contains none of the configuration.
+			info, err := os.Stat(abs)
 			if err != nil {
-				continue // not on this machine
+				continue // not on this machine, or a broken symlink
 			}
 			found = true
 
 			if info.IsDir() {
-				if err := p.walkDir(home, e, cp, abs, seen); err != nil {
+				// Walk the resolved directory, but keep the logical path for
+				// naming, so a symlinked tree lands where the user expects.
+				walkRoot := abs
+				if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+					walkRoot = resolved
+				}
+				if err := p.walkDir(home, e, cp, walkRoot, abs, seen); err != nil {
 					return nil, err
 				}
 				continue
@@ -128,8 +143,11 @@ func Scan(home string, entries []catalog.Entry) (*Plan, error) {
 
 // walkDir descends a catalog-named directory. Naming a directory in the catalog
 // is what authorises capture of the files inside it; nothing else is reachable.
-func (p *Plan) walkDir(home string, e catalog.Entry, cp catalog.Path, dir string, seen map[string]bool) error {
-	return filepath.WalkDir(dir, func(abs string, d fs.DirEntry, err error) error {
+// walkDir descends walkRoot (the resolved location on disk) while naming files
+// under logicalRoot (where the catalog said they live). The two differ whenever
+// a captured directory is a symlink.
+func (p *Plan) walkDir(home string, e catalog.Entry, cp catalog.Path, walkRoot, logicalRoot string, seen map[string]bool) error {
+	return filepath.WalkDir(walkRoot, func(abs string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// An unreadable path is usually TCC refusing us, not a bug. Record it
 			// and keep going: a partial capture the user is told about beats an
@@ -140,22 +158,32 @@ func (p *Plan) walkDir(home string, e catalog.Entry, cp catalog.Path, dir string
 			return nil
 		}
 		if d.IsDir() {
-			if matchesAny(relTo(dir, abs), cp.Skip) {
+			if matchesAny(relTo(walkRoot, abs), cp.Skip) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if matchesAny(relTo(dir, abs), cp.Skip) {
+		if matchesAny(relTo(walkRoot, abs), cp.Skip) {
 			return nil
 		}
-		p.consider(home, e, cp, abs, seen)
+		// Name the file by where the catalog says it lives, not by where the
+		// symlink happens to point.
+		logical := filepath.Join(logicalRoot, relTo(walkRoot, abs))
+		p.considerAs(home, e, cp, abs, logical, seen)
 		return nil
 	})
 }
 
 // consider classifies one candidate file and either plans it or records why not.
 func (p *Plan) consider(home string, e catalog.Entry, cp catalog.Path, abs string, seen map[string]bool) {
-	rel, ok := homeRel(home, abs)
+	p.considerAs(home, e, cp, abs, abs, seen)
+}
+
+// considerAs is consider with the on-disk path and the logical path separated,
+// so files reached through a symlinked directory are recorded under the path the
+// user actually configured.
+func (p *Plan) considerAs(home string, e catalog.Entry, cp catalog.Path, abs, logical string, seen map[string]bool) {
+	rel, ok := homeRel(home, logical)
 	if !ok {
 		p.Excluded = append(p.Excluded, bundle.Excluded{Rel: abs, Reason: "outside $HOME"})
 		return
@@ -164,7 +192,14 @@ func (p *Plan) consider(home string, e catalog.Entry, cp catalog.Path, abs strin
 		return
 	}
 
-	v := classify.Resolve(home, abs, cp.Class)
+	// Classify both the logical name and the real location: a never path must
+	// not become reachable by pointing a symlink at it.
+	v := classify.Resolve(home, logical, cp.Class)
+	if v.Class != classify.Never {
+		if inner := classify.Resolve(home, abs, cp.Class); inner.Class == classify.Never {
+			v = inner
+		}
+	}
 	if v.Class == classify.Never {
 		seen[rel] = true
 		p.Excluded = append(p.Excluded, bundle.Excluded{Rel: rel, Reason: v.Reason})
@@ -206,31 +241,67 @@ func (p *Plan) consider(home string, e catalog.Entry, cp catalog.Path, abs strin
 	})
 }
 
-// Write reads the planned files, scrubs what needs scrubbing, and fills a bundle.
-func (p *Plan) Write(w *bundle.Writer) error {
+// prepared is one file's post-scrub contents plus the audit trail.
+type prepared struct {
+	file    Planned
+	content []byte
+	scrubs  []scrub.Record
+}
+
+// Analyse reads every planned file, applies its scrub rules and runs the secret
+// scanner over the result. It writes nothing.
+//
+// Both --plan and a real capture go through here, so the two report identically.
+// Previously --plan returned before any of this ran and still printed the
+// scanner's summary, which meant "0 findings" for a scan that had not happened —
+// precisely the false assurance the scanner is designed never to give.
+func (p *Plan) Analyse() ([]prepared, error) {
+	if p.analysed != nil {
+		return p.analysed, nil
+	}
+	out := make([]prepared, 0, len(p.Files))
+	var findings []scanner.Finding
+
 	for _, f := range p.Files {
 		content, err := os.ReadFile(f.Abs)
 		if err != nil {
-			return fmt.Errorf("reading %s: %w", f.Rel, err)
+			return nil, fmt.Errorf("reading %s: %w", f.Rel, err)
 		}
-
+		var records []scrub.Record
 		if f.Class == classify.Scrub {
-			cleaned, records, err := scrub.Apply(content, f.Rules, f.Rel)
+			cleaned, r, err := scrub.Apply(content, f.Rules, f.Rel)
 			if err != nil {
 				// Failing to scrub is never survivable: passing the file through
 				// unscrubbed is exactly the outcome the class exists to prevent.
-				return fmt.Errorf("scrubbing %s: %w", f.Rel, err)
+				return nil, fmt.Errorf("scrubbing %s: %w", f.Rel, err)
 			}
-			content = cleaned
-			w.RecordScrubs(records)
+			content, records = cleaned, r
 		}
+		// Scan what would actually go into the bundle, after scrubbing. Scanning
+		// the original would report credentials the scrub already removed, and a
+		// report full of already-handled findings is a report nobody reads.
+		findings = append(findings, scanner.Scan(content, f.Rel)...)
+		out = append(out, prepared{file: f, content: content, scrubs: records})
+	}
 
-		// Scan what is actually going into the bundle, after scrubbing. Scanning
-		// the original would report credentials that the scrub already removed,
-		// and a report full of already-handled findings is a report nobody reads.
-		p.ScanFindings = append(p.ScanFindings, scanner.Scan(content, f.Rel)...)
+	for _, a := range p.LaunchAgents {
+		findings = append(findings, scanner.Scan(a.Content, "LaunchAgents/"+a.File)...)
+	}
 
-		if err := w.AddHomeFile(f.Entry, f.Rel, content, f.Mode, f.Class); err != nil {
+	p.ScanFindings = findings
+	p.analysed = out
+	return out, nil
+}
+
+// Write fills a bundle from the analysed files.
+func (p *Plan) Write(w *bundle.Writer) error {
+	files, err := p.Analyse()
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		w.RecordScrubs(f.scrubs)
+		if err := w.AddHomeFile(f.file.Entry, f.file.Rel, f.content, f.file.Mode, f.file.Class); err != nil {
 			return err
 		}
 	}
@@ -264,15 +335,6 @@ func (p *Plan) Write(w *bundle.Writer) error {
 	if err := w.SetLaunchAgents(p.LaunchAgents); err != nil {
 		return err
 	}
-	// LaunchAgent plists routinely carry tokens in EnvironmentVariables, so they
-	// are scanned too. These findings are recorded separately because the agents
-	// are stored outside the home/ tree.
-	var agentFindings []scanner.Finding
-	for _, a := range p.LaunchAgents {
-		agentFindings = append(agentFindings, scanner.Scan(a.Content, "LaunchAgents/"+a.File)...)
-	}
-	p.ScanFindings = append(p.ScanFindings, agentFindings...)
-	w.RecordScanFindings(agentFindings)
 	return nil
 }
 
@@ -293,6 +355,10 @@ func (p *Plan) exportPrefs(entries []catalog.Entry) {
 			if data, ok := ExportDomain(d.Domain); ok {
 				p.Prefs[d.Domain] = data
 				p.System.Prefs = append(p.System.Prefs, d.Domain)
+				if p.System.PrefOwners == nil {
+					p.System.PrefOwners = map[string][]string{}
+				}
+				p.System.PrefOwners[e.ID] = append(p.System.PrefOwners[e.ID], d.Domain)
 			}
 		}
 	}

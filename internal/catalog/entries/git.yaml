@@ -9,7 +9,9 @@ capture:
       class: scrub
       scrub:
         - kind: redact_match
-          pattern: 'https://[^@/:]+:([^@/]+)@'
+          # Both halves are captured. Either can be the secret: GitHub uses
+          # https://<TOKEN>:x-oauth-basic@ and other forges do the reverse.
+          pattern: 'https://([^@/:]+):([^@/]+)@'
           reason: inline credential in a git URL rewrite
     - path: ~/.config/git/ignore
       class: public

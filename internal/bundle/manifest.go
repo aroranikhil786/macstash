@@ -116,10 +116,15 @@ type Repo struct {
 	Dirty    bool   `json:"dirty,omitempty"`
 	Unpushed int    `json:"unpushed,omitempty"`
 	NoRemote bool   `json:"no_remote,omitempty"`
+	// NoUpstream means the checked-out branch tracks nothing, so its commits
+	// exist only on this machine however clean the tree looks.
+	NoUpstream bool `json:"no_upstream,omitempty"`
 }
 
 // AtRisk reports whether this repository holds work a migration would destroy.
-func (r Repo) AtRisk() bool { return r.NoRemote || r.Dirty || r.Unpushed > 0 }
+func (r Repo) AtRisk() bool {
+	return r.NoRemote || r.Dirty || r.Unpushed > 0 || r.NoUpstream
+}
 
 // System is everything that is a list rather than a file: runtime versions,
 // globally installed packages, editor extensions and the settings that live
@@ -140,6 +145,9 @@ type System struct {
 	HostsEntries   []string          `json:"hosts_entries,omitempty"`
 	// Prefs are exported preference domains, catalog-named only.
 	Prefs []string `json:"exported_pref_domains,omitempty"`
+	// PrefOwners maps a catalog entry id to the preference domains it owns, so
+	// restore can tell whether a domain belongs to an app that must be quit.
+	PrefOwners map[string][]string `json:"pref_owners,omitempty"`
 }
 
 // LaunchAgent is one per-user background job.
