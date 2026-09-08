@@ -44,7 +44,11 @@ jobs:
       # A tool that reads every credential store on a machine should not be
       # running a dependency with a known advisory. There is one dependency, so
       # this costs seconds.
+      #
+      # Pinned, not @latest. An unpinned `go install` resolves and executes
+      # whatever was published most recently, on every run, which makes the
+      # supply-chain check its own supply-chain risk. Bump this deliberately.
       - name: Known vulnerabilities
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           "$(go env GOPATH)/bin/govulncheck" ./...
