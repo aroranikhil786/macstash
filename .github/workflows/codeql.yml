@@ -1,0 +1,38 @@
+# CodeQL, as a workflow file rather than default setup, so the configuration is
+# reviewable in the repository like every other guarantee this project makes.
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, because a new query can find something in code that has not
+    # changed. A scan that only runs on push never re-examines old code.
+    - cron: "27 4 * * 1"
+
+jobs:
+  analyze:
+    name: analyze
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: go
+          # security-extended adds the lower-severity queries. This tool reads
+          # every credential store on a machine; the extra noise is affordable.
+          queries: security-extended
+
+      - uses: github/codeql-action/autobuild@v3
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:go"
