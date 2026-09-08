@@ -1,0 +1,22 @@
+id: ssh
+name: OpenSSH
+category: shell
+detect:
+  path: ~/.ssh
+capture:
+  paths:
+  # Naming the directory is safe only because ~/.ssh is default-deny in the
+  # never list: config, known_hosts and *.pub come through, and everything else
+  # is treated as key material regardless of what it is called. Capturing the
+  # public keys matters — they are what you paste back into GitHub and your
+  # servers, and hunting them down again is a genuinely annoying afternoon.
+  - path: ~/.ssh
+    class: public
+    skip:
+      - agent
+      - "*.sock"
+restore:
+  note: |
+    Private keys are never captured. Your public keys and config came across, but
+    each key needs regenerating on this machine and re-adding to the services that
+    trust it — GitHub, servers, anything using SSH auth.

@@ -1,0 +1,4 @@
+/macstash
+/dist/
+*.tar.gz
+.remember/

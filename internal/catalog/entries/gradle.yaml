@@ -1,0 +1,13 @@
+id: gradle
+name: Gradle
+category: toolchain
+detect:
+  path: ~/.gradle
+capture:
+  paths:
+    - path: ~/.gradle/gradle.properties
+      class: scrub
+      scrub:
+        - kind: drop_line
+          pattern: '(?i)^\s*[^=#]*(password|token|secret|apikey|api_key|accesskey)[^=]*='
+          reason: credential in gradle.properties

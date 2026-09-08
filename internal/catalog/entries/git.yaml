@@ -1,0 +1,22 @@
+id: git
+name: Git
+category: vcs
+detect:
+  command: git
+capture:
+  paths:
+    - path: ~/.gitconfig
+      class: scrub
+      scrub:
+        - kind: redact_match
+          pattern: 'https://[^@/:]+:([^@/]+)@'
+          reason: inline credential in a git URL rewrite
+    - path: ~/.config/git/ignore
+      class: public
+    - path: ~/.gitignore_global
+      class: public
+restore:
+  note: |
+    Commit signing is not migrated: the signing key itself is never captured. If
+    user.signingkey is set in the restored config, git will fail to commit until
+    you generate or import that key and re-register it.

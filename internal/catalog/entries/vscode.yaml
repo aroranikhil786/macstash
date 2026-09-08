@@ -1,0 +1,19 @@
+id: vscode
+name: Visual Studio Code
+category: editor
+detect:
+  app: /Applications/Visual Studio Code.app
+  brew_cask: visual-studio-code
+capture:
+  paths:
+    - path: ~/Library/Application Support/Code/User/settings.json
+      class: public
+    - path: ~/Library/Application Support/Code/User/keybindings.json
+      class: public
+    - path: ~/Library/Application Support/Code/User/snippets
+      class: public
+restore:
+  note: |
+    Extensions are NOT captured yet — settings and keybindings only. Reinstall
+    them by hand, or run `code --list-extensions` on the old machine first.
+    Saved credentials live in globalStorage, which is never captured.

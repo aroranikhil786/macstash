@@ -1,0 +1,14 @@
+id: aws
+name: AWS CLI
+category: cloud
+detect:
+  path: ~/.aws/config
+capture:
+  # config only. credentials, sso/cache and cli/cache are on the never list.
+  paths:
+    - path: ~/.aws/config
+      class: public
+restore:
+  note: |
+    Profiles and SSO start URLs came across; credentials did not. Run
+    `aws sso login` or `aws configure` per profile before anything works.

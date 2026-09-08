@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "macstash catalog entry",
+  "type": "object",
+  "required": ["id", "name", "capture"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "name": { "type": "string", "minLength": 1 },
+    "category": {
+      "type": "string",
+      "enum": ["shell", "terminal", "editor", "vcs", "toolchain", "containers", "cloud", "system"]
+    },
+    "detect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "app": { "type": "string" },
+        "brew_cask": { "type": "string" },
+        "command": { "type": "string" },
+        "path": { "type": "string" }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "class"],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "type": "string" },
+              "class": {
+                "type": "string",
+                "enum": ["public", "scrub"],
+                "description": "never is not permitted here; omit the path instead"
+              },
+              "text_only": { "type": "boolean" },
+              "max_size": { "type": "integer", "minimum": 1 },
+              "skip": { "type": "array", "items": { "type": "string" } },
+              "scrub": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["reason"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": { "type": "string", "enum": ["drop_line", "redact_match", "drop_json_key"] },
+                    "pattern": { "type": "string" },
+                    "key": { "type": "string" },
+                    "reason": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "defaults": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["domain"],
+            "additionalProperties": false,
+            "properties": { "domain": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "restore": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "quit_first": { "type": "boolean" },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["full_disk_access", "accessibility", "input_monitoring", "screen_recording", "developer_tools", "automation"]
+          }
+        },
+        "note": { "type": "string" }
+      }
+    }
+  }
+}

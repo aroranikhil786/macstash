@@ -1,0 +1,19 @@
+id: zsh
+name: Zsh
+category: shell
+detect:
+  path: ~/.zshrc
+capture:
+  paths:
+    - path: ~/.zshrc
+      class: public
+    - path: ~/.zprofile
+      class: public
+    - path: ~/.zshenv
+      class: public
+    - path: ~/.p10k.zsh
+      class: public
+restore:
+  note: |
+    Your shell config is restored but the plugins it sources are not installed by
+    this step. Open a new shell and read any "command not found" lines carefully.

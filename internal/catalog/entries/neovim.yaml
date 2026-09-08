@@ -1,0 +1,16 @@
+id: neovim
+name: Neovim
+category: editor
+detect:
+  command: nvim
+capture:
+  paths:
+    - path: ~/.config/nvim
+      class: public
+      skip:
+        - "*/.git"
+        - lazy-lock.json.bak
+        - "*/plugin/packer_compiled.lua"
+restore:
+  note: |
+    Plugins are not captured. Open nvim once and let your plugin manager sync.

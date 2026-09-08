@@ -1,0 +1,17 @@
+id: karabiner
+name: Karabiner-Elements
+category: system
+detect:
+  path: ~/.config/karabiner
+capture:
+  paths:
+    - path: ~/.config/karabiner/karabiner.json
+      class: public
+    - path: ~/.config/karabiner/assets
+      class: public
+restore:
+  quit_first: true
+  permissions: [input_monitoring]
+  note: |
+    Karabiner needs Input Monitoring permission granted by hand in System
+    Settings before any remapping works, and it rewrites its config on quit.

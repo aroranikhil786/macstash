@@ -1,0 +1,9 @@
+id: ghostty
+name: Ghostty
+category: terminal
+detect:
+  path: ~/.config/ghostty
+capture:
+  paths:
+    - path: ~/.config/ghostty/config
+      class: public

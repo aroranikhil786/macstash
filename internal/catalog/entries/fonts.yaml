@@ -1,0 +1,15 @@
+id: fonts
+name: User Fonts
+category: system
+detect:
+  path: ~/Library/Fonts
+capture:
+  paths:
+    - path: ~/Library/Fonts
+      class: public
+      skip:
+        - .DS_Store
+restore:
+  note: |
+    Fonts are copied into ~/Library/Fonts. Applications already running will not
+    see them until they restart.

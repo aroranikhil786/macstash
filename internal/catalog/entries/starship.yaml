@@ -1,0 +1,9 @@
+id: starship
+name: Starship
+category: shell
+detect:
+  command: starship
+capture:
+  paths:
+    - path: ~/.config/starship.toml
+      class: public

@@ -1,0 +1,14 @@
+id: gh
+name: GitHub CLI
+category: vcs
+detect:
+  command: gh
+capture:
+  paths:
+    # config.yml holds aliases and preferences. hosts.yml holds the OAuth token
+    # and is on the never list, so it cannot be reached from here.
+    - path: ~/.config/gh/config.yml
+      class: public
+restore:
+  note: |
+    Run `gh auth login` — the token is never captured.

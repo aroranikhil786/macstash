@@ -1,0 +1,19 @@
+id: npm
+name: npm
+category: toolchain
+detect:
+  command: npm
+capture:
+  paths:
+    - path: ~/.npmrc
+      class: scrub
+      scrub:
+        - kind: drop_line
+          pattern: '^\s*//.*:_authToken\s*='
+          reason: npm registry auth token
+        - kind: drop_line
+          pattern: '^\s*//.*:_auth\s*='
+          reason: npm registry basic auth
+        - kind: drop_line
+          pattern: '^\s*//.*:_password\s*='
+          reason: npm registry password

@@ -1,0 +1,9 @@
+id: alacritty
+name: Alacritty
+category: terminal
+detect:
+  command: alacritty
+capture:
+  paths:
+    - path: ~/.config/alacritty
+      class: public

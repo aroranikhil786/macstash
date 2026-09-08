@@ -1,0 +1,35 @@
+id: userbin
+name: Personal scripts
+category: shell
+detect:
+  path: ~/.local/bin
+capture:
+  # Personal scripts are among the most valuable things on a developer machine
+  # and among the most likely to contain a hardcoded token. Every file here goes
+  # through the secret scanner, and the report says what it found.
+  paths:
+    - path: ~/bin
+      class: public
+      text_only: true
+      max_size: 1048576
+      skip:
+        - .DS_Store
+        - node_modules
+        - .git
+        - "*.pyc"
+        - __pycache__
+    - path: ~/.local/bin
+      class: public
+      text_only: true
+      max_size: 1048576
+      skip:
+        - .DS_Store
+        - node_modules
+        - .git
+        - "*.pyc"
+        - __pycache__
+restore:
+  note: |
+    Personal scripts were captured and scanned, not vetted. Check the secret-scan
+    findings in the capture report before sharing this bundle. Scripts that call
+    tools installed outside Homebrew will not work until those are reinstalled.

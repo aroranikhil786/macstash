@@ -1,0 +1,11 @@
+id: wezterm
+name: WezTerm
+category: terminal
+detect:
+  command: wezterm
+capture:
+  paths:
+    - path: ~/.wezterm.lua
+      class: public
+    - path: ~/.config/wezterm
+      class: public

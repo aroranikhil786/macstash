@@ -1,0 +1,11 @@
+id: tmux
+name: tmux
+category: terminal
+detect:
+  command: tmux
+capture:
+  paths:
+    - path: ~/.tmux.conf
+      class: public
+    - path: ~/.config/tmux/tmux.conf
+      class: public

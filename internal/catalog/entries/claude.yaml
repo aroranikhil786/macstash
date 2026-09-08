@@ -1,0 +1,49 @@
+id: claude
+name: Claude Code
+category: editor
+detect:
+  path: ~/.claude
+capture:
+  paths:
+    # Global instructions and settings are the whole configuration. Plugins and
+    # marketplaces are named inside settings.json and re-fetched on first run,
+    # which is why 116MB of ~/.claude/plugins is not captured.
+    - path: ~/.claude/CLAUDE.md
+      class: public
+    - path: ~/.claude/settings.json
+      class: public
+    - path: ~/.claude/agents
+      class: public
+    - path: ~/.claude/commands
+      class: public
+    - path: ~/.claude/skills
+      class: public
+    # Personal hook scripts: shell config commonly sources these by absolute
+    # path, so leaving them behind breaks the restored shell. Only the scripts —
+    # a hooks directory also accumulates runtime state, logs and media assets,
+    # none of which mean anything on a different machine.
+    - path: ~/.claude/hooks
+      class: public
+      skip:
+        - node_modules
+        - .git
+        - "*.log"
+        - "*.pid"
+        - "*.mp3"
+        - "*.wav"
+        - "*.ogg"
+        - sounds
+        - trainer
+        - ".copilot-session-*"
+        - ".state.json"
+        - ".sound.pid"
+        - ".paused"
+        - ".last_update_check"
+        - ".update_available"
+        - __pycache__
+        - .venv
+restore:
+  note: |
+    Conversation history, prompt history and config.json are never captured.
+    You will sign in again on the new machine. Plugins re-install from the
+    marketplaces named in settings.json the first time Claude Code runs.

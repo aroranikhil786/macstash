@@ -1,0 +1,20 @@
+id: ohmyzsh
+name: Oh My Zsh
+category: shell
+detect:
+  path: ~/.oh-my-zsh
+capture:
+  paths:
+    # Only the custom directory. The framework itself is thousands of files that
+    # the installer restores in seconds, and a stale copy of it is worse than a
+    # fresh one.
+    - path: ~/.oh-my-zsh/custom
+      class: public
+      skip:
+        - "*/.git"
+        - example.zsh
+restore:
+  note: |
+    Oh My Zsh itself is not captured — reinstall it from ohmyz.sh first, then
+    these custom themes and plugins drop back into ~/.oh-my-zsh/custom.
+    Plugins cloned from GitHub need cloning again.

@@ -1,0 +1,18 @@
+id: rectangle
+name: Rectangle
+category: system
+detect:
+  app: /Applications/Rectangle.app
+  brew_cask: rectangle
+capture:
+  defaults:
+    - domain: com.knollsoft.Rectangle
+  paths:
+    - path: ~/Library/Application Support/Rectangle
+      class: public
+restore:
+  quit_first: true
+  permissions: [accessibility]
+  note: |
+    Rectangle needs Accessibility permission granted by hand before it can move
+    any windows.

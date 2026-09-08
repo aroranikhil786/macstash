@@ -1,0 +1,17 @@
+id: docker
+name: Docker
+category: containers
+detect:
+  command: docker
+capture:
+  paths:
+    - path: ~/.docker/config.json
+      class: scrub
+      scrub:
+        - kind: drop_json_key
+          key: auths
+          reason: container registry credentials
+restore:
+  note: |
+    Registry logins are not migrated. Run `docker login` for each registry listed
+    in the report before your first pull from a private repository.

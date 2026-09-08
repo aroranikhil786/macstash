@@ -1,0 +1,22 @@
+id: iterm2
+name: iTerm2
+category: terminal
+detect:
+  app: /Applications/iTerm.app
+  brew_cask: iterm2
+capture:
+  defaults:
+    - domain: com.googlecode.iterm2
+  paths:
+    - path: ~/Library/Application Support/iTerm2/DynamicProfiles
+      class: public
+      skip:
+        - Cache
+    - path: ~/.config/iterm2
+      class: public
+restore:
+  quit_first: true
+  permissions: [full_disk_access]
+  note: |
+    iTerm2 rewrites its preferences when it quits, so it must not be running
+    during restore or it will overwrite what was just written.
