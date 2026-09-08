@@ -105,6 +105,11 @@ type App struct {
 	// Source is how the app got here, and therefore whether a restore can bring
 	// it back automatically.
 	Source string `json:"source"`
+	// CaskToken is the Homebrew cask that can install this app, where one
+	// exists. An app downloaded as a disk image is not thereby uninstallable by
+	// Homebrew — most of them have a cask — so this is resolved at capture and
+	// carried, turning a hand-reinstall checklist into something restore can do.
+	CaskToken string `json:"cask_token,omitempty"`
 }
 
 // Repo is one git working tree. Only what is needed to clone it again is kept;

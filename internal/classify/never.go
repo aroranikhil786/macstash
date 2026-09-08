@@ -12,8 +12,21 @@ package classify
 
 // neverExact are $HOME-relative paths that are never captured and never restored.
 var neverExact = map[string]string{
-	".netrc":                             "machine credentials",
-	".claude/config.json":                "may hold API key approvals",
+	".netrc":              "machine credentials",
+	".claude/config.json": "may hold API key approvals",
+	// Claude Code's top-level config is distinct from ~/.claude/ and holds
+	// per-project history. 74KB of it on the machine this was written against.
+	".claude.json":                        "project history and API key approvals",
+	".claude.json.backup":                 "project history and API key approvals",
+	".gemini/oauth_creds.json":            "Gemini CLI OAuth credentials",
+	".gemini/google_accounts.json":        "Google account identifiers",
+	".copilot/command-history-state.json": "prompt history may contain pasted tokens",
+	".gem/credentials":                    "RubyGems API key",
+	// Maven settings.xml routinely carries plaintext <password> elements for
+	// internal repositories. There is no Maven catalog entry and no XML scrub
+	// rule, so the safe default is to keep it out entirely.
+	".m2/settings.xml":                   "may hold repository passwords",
+	".emulator_console_auth_token":       "Android emulator console token",
 	".claude/.credentials.json":          "agent auth token",
 	".git-credentials":                   "git credential store",
 	".aws/credentials":                   "AWS access keys",
@@ -55,10 +68,13 @@ var neverDirs = map[string]string{
 	".config/doctl":       "DigitalOcean token",
 	".config/configstore": "npm-configstore token store",
 	".config/neonctl":     "Neon auth token",
-	".wrangler":           "Cloudflare token",
-	".vercel":             "Vercel token",
-	".netlify":            "Netlify token",
-	".docker/contexts":    "may embed endpoint credentials",
+	// mcp-remote caches OAuth tokens per server under a versioned directory.
+	".mcp-auth":        "MCP remote OAuth tokens",
+	".cocoapods/trunk": "CocoaPods trunk token",
+	".wrangler":        "Cloudflare token",
+	".vercel":          "Vercel token",
+	".netlify":         "Netlify token",
+	".docker/contexts": "may embed endpoint credentials",
 
 	// Editor secret stores. state.vscdb is the archetype of "looks like state,
 	// is a token store".
@@ -97,15 +113,21 @@ var neverDirGlobs = map[string]string{
 // neverBasenames are matched against the file name at any depth inside any
 // captured tree.
 var neverBasenames = map[string]string{
-	".env":               "environment file",
-	".env.*":             "environment file",
-	"*.pem":              "private key or certificate",
-	"*.key":              "private key",
-	"*.p12":              "key bundle",
-	"*.pfx":              "key bundle",
-	"*.jks":              "Java keystore",
-	"*.keystore":         "keystore",
-	"secring.gpg":        "GPG secret keyring",
-	"state.vscdb":        "editor secret storage",
+	".env":        "environment file",
+	".env.*":      "environment file",
+	"*.pem":       "private key or certificate",
+	"*.key":       "private key",
+	"*.p12":       "key bundle",
+	"*.pfx":       "key bundle",
+	"*.jks":       "Java keystore",
+	"*.keystore":  "keystore",
+	"secring.gpg": "GPG secret keyring",
+	"state.vscdb": "editor secret storage",
+	// MCP server definitions carry an `env` block, and what goes in it is
+	// whatever the server needs to authenticate. The file on the machine this
+	// was written against held a postgres connection URI, password included.
+	// The nesting puts it out of reach of a top-level JSON key drop, so the
+	// whole file stays out and the report tells the user to re-add it.
+	"mcp.json":           "MCP server config embeds credentials in env",
 	"state.vscdb.backup": "editor secret storage",
 }

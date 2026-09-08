@@ -1,0 +1,14 @@
+id: gemini
+name: Gemini CLI
+category: cli
+detect:
+  path: ~/.gemini
+capture:
+  paths:
+    # settings.json is preferences only. oauth_creds.json and
+    # google_accounts.json sit next to it and are on the never list.
+    - path: ~/.gemini/settings.json
+      class: public
+restore:
+  note: |
+    Run `gemini auth` — the OAuth credentials are never captured.

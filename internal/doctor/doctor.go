@@ -249,35 +249,72 @@ func checkExtensions(man *bundle.Manifest) []Check {
 	return checks
 }
 
-// checkApps reports applications that Homebrew cannot reinstall and which are
-// not present.
+// checkApps reports applications recorded on the old machine that are not here.
+//
+// The two groups are kept apart deliberately. An app with a Homebrew cask is
+// Missing — a gap with a command that closes it. An app without one is an
+// Action, because no tool can close it. Reporting both as "reinstall by hand"
+// was the old behaviour and it was wrong on the machine it was written against:
+// nine of the ten apps it told the user to go and find had a cask.
 func checkApps(man *bundle.Manifest) []Check {
-	var missing []string
+	var installable, manual []string
+	tokens := map[string]string{}
 	for _, a := range man.Applications {
 		if a.Source == "homebrew" || a.Source == "system" {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join("/Applications", a.Name+".app")); err == nil {
+		if appInstalled(a.Name) {
 			continue
 		}
-		home, err := os.UserHomeDir()
-		if err == nil {
-			if _, err := os.Stat(filepath.Join(home, "Applications", a.Name+".app")); err == nil {
-				continue
+		if a.CaskToken != "" {
+			installable = append(installable, a.Name)
+			tokens[a.Name] = a.CaskToken
+			continue
+		}
+		manual = append(manual, a.Name)
+	}
+
+	var checks []Check
+	if len(installable) > 0 {
+		sort.Strings(installable)
+		var cmds []string
+		for _, n := range truncate(installable, 6) {
+			if t, ok := tokens[n]; ok {
+				cmds = append(cmds, t)
 			}
 		}
-		missing = append(missing, a.Name)
+		checks = append(checks, Check{
+			Area: "applications", Status: Missing,
+			Detail: fmt.Sprintf("%d app(s) are not installed but Homebrew has a cask: %s",
+				len(installable), strings.Join(truncate(installable, 8), ", ")),
+			Fix: "brew install --cask " + strings.Join(cmds, " "),
+		})
 	}
-	if len(missing) == 0 {
-		return nil
+	if len(manual) > 0 {
+		sort.Strings(manual)
+		checks = append(checks, Check{
+			Area: "applications", Status: Action,
+			Detail: fmt.Sprintf("%d app(s) have no Homebrew cask and are not here: %s",
+				len(manual), strings.Join(truncate(manual, 8), ", ")),
+			Fix: "download and install these yourself — macstash never fetches from URLs",
+		})
 	}
-	sort.Strings(missing)
-	return []Check{{
-		Area: "applications", Status: Action,
-		Detail: fmt.Sprintf("%d app(s) installed by hand on the old machine are not here: %s",
-			len(missing), strings.Join(truncate(missing, 8), ", ")),
-		Fix: "download and install these yourself — macstash never fetches from URLs",
-	}}
+	return checks
+}
+
+// appInstalled reports whether an app bundle exists in any of the places macOS
+// keeps them.
+func appInstalled(name string) bool {
+	dirs := []string{"/Applications", "/Applications/Utilities"}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, "Applications"))
+	}
+	for _, d := range dirs {
+		if _, err := os.Stat(filepath.Join(d, name+".app")); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // checkPermissions always reports, because there is no way to read TCC grants

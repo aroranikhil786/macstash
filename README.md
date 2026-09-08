@@ -103,6 +103,23 @@ have it.
 Flags: `--plan`, `--apply`, `--only <ids>`, `--skip <ids>`, `--yes`, `--verbose`,
 `-o <path>`, `--force`, `--from-other-user`, `--unredacted`, `--deep`.
 
+Restore does the safe things by default. The three phases that install software
+or reach the network are opt-in, because each one is long, unattended, and worth
+choosing deliberately:
+
+| Flag | What it adds to `restore --apply` |
+|---|---|
+| `--install-apps` | Installs missing applications with `brew install --cask` |
+| `--clone-repos` | Clones the recorded repositories |
+| `--install-toolchains` | Reinstalls global npm/gem/pipx/cargo packages |
+
+`--install-apps` is worth knowing about. Homebrew only reports software Homebrew
+installed, so an app that arrived as a disk image looks unrecoverable — but most
+of them have a cask anyway. On the machine this was developed against, all ten
+"hand-installed" apps had one, so the manual reinstall list was empty. macstash
+resolves the cask at capture and hands the list to Homebrew; it never downloads
+from a URL it chose itself.
+
 Git remotes and tap URLs are hidden by default, because terminal output gets
 screenshotted. `--unredacted` shows them.
 

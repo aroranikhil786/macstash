@@ -57,6 +57,10 @@ Flags:
   --install-toolchains  reinstall global npm/gem/pipx/cargo packages during
                       restore (off by default: it is a long unattended,
                       network-bound phase; the report lists the commands)
+  --install-apps      install missing applications with brew install --cask
+                      (off by default: it downloads and installs GUI software)
+  --clone-repos       clone the recorded repositories during restore (off by
+                      default: needs your SSH key and any VPN to be in place)
   --include-launch-agents   restore LaunchAgents (background programs; off by
                       default because they run code at every login)
   --verbose           list every file
@@ -81,6 +85,8 @@ type flags struct {
 	yes               bool
 	deep              bool
 	installToolchains bool
+	installApps       bool
+	cloneRepos        bool
 	prune             bool
 	to                string
 	launchAgents      bool
@@ -113,6 +119,10 @@ func parse(argv []string) (*flags, error) {
 			f.deep = true
 		case "--install-toolchains":
 			f.installToolchains = true
+		case "--install-apps":
+			f.installApps = true
+		case "--clone-repos":
+			f.cloneRepos = true
 		case "--prune":
 			f.prune = true
 		case "--to":
@@ -422,31 +432,77 @@ func printApplications(apps []bundle.App, brewConsulted, verbose bool) {
 		}
 	}
 
-	fmt.Printf("\nApplications: %d found — %d reinstallable by Homebrew, %d from the App Store,\n"+
-		"              %d installed by hand, %d shipped with macOS\n",
-		len(apps), len(byBrew), len(fromStore), len(manual), len(system))
+	// Not being installed by Homebrew is not the same as not being installable
+	// by it. Most apps that arrived as a disk image have a cask, and saying
+	// "reinstall these ten by hand" when nine of them are one command away is a
+	// failure of the tool rather than a fact about the machine.
+	var byCask, unmanaged []bundle.App
+	for _, a := range manual {
+		if a.CaskToken != "" {
+			byCask = append(byCask, a)
+		} else {
+			unmanaged = append(unmanaged, a)
+		}
+	}
+
+	fmt.Printf("\nApplications: %d found — %d already managed by Homebrew, %d more Homebrew can\n"+
+		"              install, %d from the App Store, %d needing a manual download,\n"+
+		"              %d shipped with macOS\n",
+		len(apps), len(byBrew), len(byCask), len(fromStore), len(unmanaged), len(system))
 
 	if !brewConsulted {
 		fmt.Println("  warning: brew could not be run, so Homebrew-installed apps could not be\n" +
 			"           told apart from hand-installed ones. The list below is over-long.")
 	}
 
-	if len(manual) > 0 {
-		fmt.Printf("\nThese %d must be reinstalled by hand — macstash never downloads from URLs,\nso it lists them instead:\n", len(manual))
-		shown := 0
-		for _, a := range manual {
-			if !verbose && shown >= 15 {
-				fmt.Printf("  ... and %d more (--verbose to list)\n", len(manual)-shown)
-				break
-			}
-			v := a.Version
-			if v != "" {
-				v = "  (" + v + ")"
-			}
+	if len(byCask) > 0 {
+		fmt.Printf("\nThese %d were installed by hand, but Homebrew has a cask for them, so a\nrestore can put them back (`restore --apply --install-apps`):\n", len(byCask))
+		printAppList(byCask, verbose, true)
+	}
+
+	if len(unmanaged) > 0 {
+		fmt.Printf("\nThese %d have no Homebrew cask and must be reinstalled by hand — macstash\nnever downloads from URLs, so it lists them instead:\n", len(unmanaged))
+		printAppList(unmanaged, verbose, false)
+	}
+}
+
+// printAppList prints app names, capped unless --verbose. The cap has to
+// announce itself: a truncated list that looks complete is how someone finishes
+// a migration believing they are done.
+func printAppList(apps []bundle.App, verbose, withToken bool) {
+	shown := 0
+	for _, a := range apps {
+		if !verbose && shown >= 15 {
+			fmt.Printf("  ... and %d more (--verbose to list)\n", len(apps)-shown)
+			return
+		}
+		v := a.Version
+		if v != "" {
+			v = "  (" + v + ")"
+		}
+		if withToken {
+			fmt.Printf("  %-32s %s\n", a.Name+v, "brew install --cask "+a.CaskToken)
+		} else {
 			fmt.Printf("  %s%s\n", a.Name, v)
-			shown++
+		}
+		shown++
+	}
+}
+
+// printAppInstallHint mentions the flag when it would actually do something,
+// and stays quiet when it would not.
+func printAppInstallHint(apps []bundle.App) {
+	n := 0
+	for _, a := range apps {
+		if a.CaskToken != "" && a.Source != capture.SourceHomebrew && a.Source != capture.SourceSystem {
+			n++
 		}
 	}
+	if n == 0 {
+		return
+	}
+	fmt.Printf("\n%d recorded application(s) can be installed with Homebrew. Re-run with\n"+
+		"--install-apps to do that.\n", n)
 }
 
 // printRepos reports git working trees, leading with the ones that would lose
@@ -637,6 +693,18 @@ func cmdRestore(f *flags) error {
 		p.RestoreSDKs(os.Stdout, false)
 		p.RestoreToolchains(os.Stdout, false)
 		p.RestoreExtensions(os.Stdout, false)
+		if f.installApps {
+			if err := restore.InstallApps(p.Manifest.Applications, false, os.Stdout); err != nil {
+				return err
+			}
+		} else {
+			printAppInstallHint(p.Manifest.Applications)
+		}
+		if f.cloneRepos {
+			if err := restore.CloneRepos(home, p.Manifest.Repos, false, os.Stdout); err != nil {
+				return err
+			}
+		}
 		p.ReportOnly(os.Stdout)
 		// No offerBundleDeletion here. --plan must not change anything, and
 		// offering a destructive action from a dry run is exactly the kind of
@@ -663,6 +731,11 @@ func cmdRestore(f *flags) error {
 			return err
 		}
 	}
+	if f.installApps {
+		if err := restore.InstallApps(p.Manifest.Applications, true, os.Stdout); err != nil {
+			return err
+		}
+	}
 	p.RestoreSDKs(os.Stdout, true)
 
 	stamp := time.Now().Format("2006-01-02T15-04-05")
@@ -684,6 +757,22 @@ func cmdRestore(f *flags) error {
 		return err
 	}
 	p.ReportOnly(os.Stdout)
+
+	// Cloning is last on purpose: it is the only step that needs credentials
+	// macstash deliberately never captured, so it is the most likely to fail and
+	// the least damaging to fail late.
+	if f.cloneRepos {
+		if err := restore.CloneRepos(home, p.Manifest.Repos, true, os.Stdout); err != nil {
+			return err
+		}
+	} else if n := len(p.Manifest.Repos); n > 0 {
+		fmt.Printf("\n%d repository(ies) recorded. `macstash clone %s` clones them, or\n"+
+			"re-run restore with --clone-repos.\n", n, f.args[0])
+	}
+
+	if !f.installApps {
+		printAppInstallHint(p.Manifest.Applications)
+	}
 	offerBundleDeletion(f.args[0], f.yes)
 
 	if len(p.Manifest.Scrubs) > 0 {

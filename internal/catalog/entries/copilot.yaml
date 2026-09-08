@@ -1,0 +1,19 @@
+id: copilot
+name: GitHub Copilot CLI
+category: cli
+detect:
+  path: ~/.copilot
+capture:
+  paths:
+    - path: ~/.copilot/config.json
+      class: public
+    # Per-directory tool approvals. These encode decisions made over months and
+    # are tedious to rebuild, but they name local paths, so they only make sense
+    # if the same trees are cloned back.
+    - path: ~/.copilot/permissions-config.json
+      class: public
+restore:
+  note: |
+    Sign in again with `copilot`. Prompt history and session state are never
+    captured. Tool approvals reference absolute paths, so they apply only once
+    the same repositories exist at the same locations.

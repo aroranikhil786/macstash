@@ -128,7 +128,7 @@ func Scan(home string, entries []catalog.Entry) (*Plan, error) {
 	// nothing is copied, but a migration is not usable without knowing what was
 	// installed by hand and which trees hold unpushed work.
 	casks, brewKnown := CaskTokens()
-	p.Applications = ScanApplications(casks)
+	p.Applications = ResolveCasks(ScanApplications(casks))
 	p.BrewConsulted = brewKnown
 	p.Repos = ScanRepos(home, 4)
 	p.System = ScanSystem(home)

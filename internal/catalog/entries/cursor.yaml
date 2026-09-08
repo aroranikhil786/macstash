@@ -1,0 +1,20 @@
+id: cursor
+name: Cursor
+category: editor
+detect:
+  path: ~/.cursor
+capture:
+  paths:
+    # Same layout as VS Code: settings and keybindings are the configuration,
+    # globalStorage is the secret store and is on the never list.
+    - path: ~/Library/Application Support/Cursor/User/settings.json
+      class: public
+    - path: ~/Library/Application Support/Cursor/User/keybindings.json
+      class: public
+    - path: ~/.cursor/hooks.json
+      class: public
+restore:
+  note: |
+    ~/.cursor/mcp.json is never captured: MCP server definitions hold their
+    credentials inline in `env`, so the file cannot be separated from its
+    secrets. Re-add your MCP servers by hand. Extensions are not captured.
