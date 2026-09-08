@@ -394,6 +394,7 @@ func printCapturePlan(p *capture.Plan, unredacted, verbose bool) {
 
 	printApplications(p.Applications, p.BrewConsulted, verbose)
 	printRepos(p.Repos, unredacted, verbose)
+	printMCPServers(p.System.MCPServers)
 
 	if len(p.Excluded) > 0 {
 		fmt.Printf("\nFound and deliberately not captured (%d):\n", len(p.Excluded))
@@ -505,6 +506,40 @@ func printAppInstallHint(apps []bundle.App) {
 		"--install-apps to do that.\n", n)
 }
 
+// printMCPServers lists configured MCP servers.
+//
+// The definitions are never captured, so this is a rebuild checklist. The env
+// variable names are the point: "postgres needs DATABASE_URI" is the fact that
+// is genuinely hard to reconstruct months later, and it carries no secret.
+func printMCPServers(servers []bundle.MCPServer) {
+	if len(servers) == 0 {
+		return
+	}
+	fmt.Printf("\nMCP servers: %d configured (definitions are never captured — they hold\n"+
+		"             credentials inline, in env, args, URLs and headers)\n", len(servers))
+
+	source := ""
+	for _, m := range servers {
+		if m.Source != source {
+			source = m.Source
+			fmt.Printf("  %s\n", source)
+		}
+		how := m.Command
+		if m.Package != "" {
+			how += " " + m.Package
+		}
+		if m.Host != "" {
+			how = m.Transport + " " + m.Host
+		}
+		fmt.Printf("    %-18s %s\n", m.Name, how)
+		if len(m.EnvKeys) > 0 {
+			fmt.Printf("    %-18s needs: %s\n", "", strings.Join(m.EnvKeys, ", "))
+		}
+	}
+	fmt.Println("\n  Re-add these by hand on the new machine; the values they need are in\n" +
+		"  your password manager or each service's dashboard, not in this bundle.")
+}
+
 // printRepos reports git working trees, leading with the ones that would lose
 // work. A repository with no remote, or with commits that were never pushed,
 // exists only on the machine being replaced.
@@ -584,6 +619,7 @@ func cmdInspect(f *flags) error {
 	}
 	if len(man.Repos) > 0 {
 		printRepos(man.Repos, f.unredacted, f.verbose)
+		printMCPServers(man.System.MCPServers)
 	}
 
 	fmt.Println()

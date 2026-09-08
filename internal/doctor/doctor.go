@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/aroranikhil786/macstash/internal/bundle"
+	"github.com/aroranikhil786/macstash/internal/capture"
 )
 
 // Status is the outcome of one check.
@@ -53,6 +54,7 @@ func Run(home string, man *bundle.Manifest, deep bool) []Check {
 	checks = append(checks, checkToolchains(man)...)
 	checks = append(checks, checkExtensions(man)...)
 	checks = append(checks, checkApps(man)...)
+	checks = append(checks, checkMCP(home, man)...)
 	checks = append(checks, checkPermissions(man)...)
 	if deep {
 		checks = append(checks, checkDeep(man)...)
@@ -315,6 +317,56 @@ func appInstalled(name string) bool {
 		}
 	}
 	return false
+}
+
+// checkMCP reports MCP servers that were configured on the old machine and are
+// not configured here.
+//
+// Their definitions are never captured — they hold credentials inline — so this
+// is the only trace of them a restore leaves. Reporting the ones already
+// present matters as much as the missing ones: re-adding a server that is
+// already there is how people end up with duplicates.
+func checkMCP(home string, man *bundle.Manifest) []Check {
+	if len(man.System.MCPServers) == 0 {
+		return nil
+	}
+	here := map[string]bool{}
+	for _, s := range capture.ScanMCPServers(home) {
+		here[strings.ToLower(s.Name)] = true
+	}
+
+	var missing []string
+	needs := map[string][]string{}
+	for _, s := range man.System.MCPServers {
+		if here[strings.ToLower(s.Name)] {
+			continue
+		}
+		missing = append(missing, s.Name)
+		if len(s.EnvKeys) > 0 {
+			needs[s.Name] = s.EnvKeys
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	sort.Strings(missing)
+
+	fix := "re-add them in each editor's MCP settings"
+	if len(needs) > 0 {
+		var parts []string
+		for _, n := range missing {
+			if k, ok := needs[n]; ok {
+				parts = append(parts, n+" needs "+strings.Join(k, ", "))
+			}
+		}
+		fix = strings.Join(truncate(parts, 4), "; ")
+	}
+	return []Check{{
+		Area: "mcp", Status: Action,
+		Detail: fmt.Sprintf("%d MCP server(s) are not configured here: %s",
+			len(missing), strings.Join(truncate(missing, 8), ", ")),
+		Fix: fix,
+	}}
 }
 
 // checkPermissions always reports, because there is no way to read TCC grants

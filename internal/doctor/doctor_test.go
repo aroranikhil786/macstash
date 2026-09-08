@@ -416,3 +416,56 @@ func TestRunSkipsDeepChecksUnlessAsked(t *testing.T) {
 		t.Fatalf("deep checks ran without --deep: %+v", got)
 	}
 }
+
+// MCP definitions are never captured, so this check is the only trace a restore
+// leaves of them. It has to be an Action: no tool can re-add them.
+func TestCheckMCPReportsServersMissingHere(t *testing.T) {
+	home := t.TempDir() // no MCP configs at all, so everything is missing
+	man := &bundle.Manifest{System: bundle.System{MCPServers: []bundle.MCPServer{
+		{Name: "postgres", Source: "~/.cursor/mcp.json", EnvKeys: []string{"DATABASE_URI"}},
+		{Name: "context7", Source: "~/.cursor/mcp.json"},
+	}}}
+
+	checks := checkMCP(home, man)
+
+	if len(checks) != 1 {
+		t.Fatalf("want 1 check, got %d: %+v", len(checks), checks)
+	}
+	if checks[0].Status != Action {
+		t.Errorf("want %q, got %q", Action, checks[0].Status)
+	}
+	if !strings.Contains(checks[0].Detail, "2 MCP server") {
+		t.Errorf("want the count, got %q", checks[0].Detail)
+	}
+	// The variable names are the part worth carrying; the fix must name them.
+	if !strings.Contains(checks[0].Fix, "DATABASE_URI") {
+		t.Errorf("the fix should say what the server needs, got %q", checks[0].Fix)
+	}
+}
+
+// A server already configured here is not a task. Telling someone to re-add it
+// is how duplicate entries happen.
+func TestCheckMCPIgnoresServersAlreadyConfigured(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".cursor", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := `{"mcpServers":{"context7":{"command":"npx"}}}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	man := &bundle.Manifest{System: bundle.System{MCPServers: []bundle.MCPServer{
+		{Name: "context7", Source: "~/.cursor/mcp.json"},
+	}}}
+
+	if checks := checkMCP(home, man); len(checks) != 0 {
+		t.Fatalf("an already-configured server is not outstanding: %+v", checks)
+	}
+}
+
+func TestCheckMCPIsSilentWhenNoneWereRecorded(t *testing.T) {
+	if checks := checkMCP(t.TempDir(), &bundle.Manifest{}); len(checks) != 0 {
+		t.Fatalf("want nothing, got %+v", checks)
+	}
+}

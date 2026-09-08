@@ -123,6 +123,29 @@ from a URL it chose itself.
 Git remotes and tap URLs are hidden by default, because terminal output gets
 screenshotted. `--unredacted` shows them.
 
+### Things that are listed, never copied
+
+Repositories, applications, Docker images, SDK versions and MCP servers are
+recorded as inventory: enough to rebuild them, none of their contents.
+
+MCP servers are the strictest case. A server definition holds its credentials
+inline, and there is no single place they live — the machine this was developed
+against had a postgres password in `env` and a Tavily API key passed as a
+positional argument, in the same file. A scrub rule that cleared `env` would
+have looked correct and shipped the second key anyway. So the config files stay
+on the never list, and what travels is the server name, what launched it, and
+the *names* of the variables it needed:
+
+```
+MCP servers: 7 configured (definitions are never captured)
+  ~/.cursor/mcp.json
+    postgres           docker crystaldba/postgres-mcp
+                       needs: DATABASE_URI
+```
+
+That is the half you cannot look up again. The values are in your password
+manager; the fact that you ever wired the server up is only here.
+
 ## Contributing a catalog entry
 
 Everything macstash knows lives in `internal/catalog/entries/*.yaml`, embedded in

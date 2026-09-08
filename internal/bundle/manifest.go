@@ -148,11 +148,34 @@ type System struct {
 	Keyboard       map[string]string `json:"keyboard,omitempty"`
 	DefaultApps    map[string]string `json:"default_apps,omitempty"`
 	HostsEntries   []string          `json:"hosts_entries,omitempty"`
+	// MCPServers is which MCP servers were configured, never how. The config
+	// files themselves are on the never list.
+	MCPServers []MCPServer `json:"mcp_servers,omitempty"`
 	// Prefs are exported preference domains, catalog-named only.
 	Prefs []string `json:"exported_pref_domains,omitempty"`
 	// PrefOwners maps a catalog entry id to the preference domains it owns, so
 	// restore can tell whether a domain belongs to an app that must be quit.
 	PrefOwners map[string][]string `json:"pref_owners,omitempty"`
+}
+
+// MCPServer is one configured MCP server, reduced to the facts that carry no
+// secret.
+//
+// The definition is never captured. Credentials appear in `env`, in positional
+// args, in a URL query string and in auth headers, so there is no position a
+// scrub rule could reliably clear. What travels is the name, what launched it,
+// and the names of the variables it needed — enough to wire it up again.
+type MCPServer struct {
+	Name    string `json:"name"`
+	Source  string `json:"source"`
+	Command string `json:"command,omitempty"`
+	Package string `json:"package,omitempty"`
+	// EnvKeys are variable names only, never values.
+	EnvKeys []string `json:"env_keys,omitempty"`
+	// Transport and Host describe a remote server. The full URL is not kept:
+	// it can carry a token in its query string.
+	Transport string `json:"transport,omitempty"`
+	Host      string `json:"host,omitempty"`
 }
 
 // LaunchAgent is one per-user background job.

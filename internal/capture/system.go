@@ -65,6 +65,7 @@ func ScanSystem(home string) bundle.System {
 	s.Keyboard = scanKeyboard()
 	s.DefaultApps = scanDefaultApps()
 	s.HostsEntries = scanHosts()
+	s.MCPServers = ScanMCPServers(home)
 	return s
 }
 
