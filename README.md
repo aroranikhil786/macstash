@@ -177,6 +177,23 @@ CI rejects any entry naming a path on the never list. That list lives in Go
 (`internal/classify/never.go`), not YAML, so a catalog change cannot reach around
 it.
 
+## Installing
+
+```
+brew install aroranikhil786/tap/macstash
+```
+
+Or take a tarball from [releases](https://github.com/aroranikhil786/macstash/releases)
+and check it against the published checksums before running it:
+
+```
+shasum -a 256 -c SHA256SUMS
+```
+
+macOS only, Apple Silicon and Intel. The tool reads preference domains, TCC
+requirements and Homebrew state, and sandboxes itself with `sandbox-exec`;
+there is nothing in it to port.
+
 ## Building
 
 ```
