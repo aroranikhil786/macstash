@@ -524,20 +524,28 @@ func printApplications(apps []bundle.App, brewConsulted, verbose bool) {
 // announce itself: a truncated list that looks complete is how someone finishes
 // a migration believing they are done.
 func printAppList(apps []bundle.App, verbose, withToken bool) {
+	label := func(a bundle.App) string {
+		if a.Version == "" {
+			return a.Name
+		}
+		return a.Name + "  (" + a.Version + ")"
+	}
+	var labels []string
+	for _, a := range apps {
+		labels = append(labels, label(a))
+	}
+	width := column(labels, 32, 44)
+
 	shown := 0
 	for _, a := range apps {
 		if !verbose && shown >= 15 {
 			fmt.Printf("  ... and %d more (--verbose to list)\n", len(apps)-shown)
 			return
 		}
-		v := a.Version
-		if v != "" {
-			v = "  (" + v + ")"
-		}
 		if withToken {
-			fmt.Printf("  %-32s %s\n", a.Name+v, "brew install --cask "+a.CaskToken)
+			fmt.Printf("  %-*s %s\n", width, label(a), "brew install --cask "+a.CaskToken)
 		} else {
-			fmt.Printf("  %s%s\n", a.Name, v)
+			fmt.Printf("  %s\n", label(a))
 		}
 		shown++
 	}
@@ -593,6 +601,69 @@ func printMCPServers(servers []bundle.MCPServer) {
 		"  your password manager or each service's dashboard, not in this bundle.")
 }
 
+// countNamespaced totals a manager -> items map and names the managers.
+func countNamespaced(m map[string][]string) (int, []string) {
+	total := 0
+	var names []string
+	for k, v := range m {
+		total += len(v)
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return total, names
+}
+
+// printSystemInventory reports the lists a bundle carries that are neither
+// files nor applications.
+//
+// inspect showed neither of these, while `restore --plan` showed both. A bundle
+// that records 47 editor extensions and then never mentions them reads as a
+// bundle that does not have them — and the VS Code restore note used to say
+// exactly that, which is how a stale note survives.
+func printSystemInventory(s bundle.System, verbose bool) {
+	if n, _ := countNamespaced(s.Extensions); n > 0 {
+		fmt.Printf("\nEditor extensions: %d recorded — restore reinstalls these where the\n"+
+			"                   editor's command-line tool is on PATH\n", n)
+		printNamespaced(s.Extensions, "extension", verbose)
+	}
+	if n, _ := countNamespaced(s.Toolchains); n > 0 {
+		fmt.Printf("\nGlobal packages: %d recorded — restore reinstalls these with\n"+
+			"                 --install-toolchains\n", n)
+		printNamespaced(s.Toolchains, "package", verbose)
+	}
+}
+
+func printNamespaced(m map[string][]string, noun string, verbose bool) {
+	_, names := countNamespaced(m)
+	for _, name := range names {
+		items := m[name]
+		shown := items
+		suffix := ""
+		if !verbose && len(shown) > 5 {
+			shown = shown[:5]
+			suffix = fmt.Sprintf(", ... +%d more", len(items)-5)
+		}
+		fmt.Printf("  %-14s %d %s(s): %s%s\n", name, len(items), noun,
+			strings.Join(shown, ", "), suffix)
+	}
+}
+
+// column returns a padding width that fits the longest label, so one long name
+// does not knock the second column out of line on every other row. It is capped
+// so a single pathological entry cannot indent everything off the screen.
+func column(labels []string, min, max int) int {
+	w := min
+	for _, l := range labels {
+		if n := len(l); n > w {
+			w = n
+		}
+	}
+	if w > max {
+		return max
+	}
+	return w
+}
+
 // printRepos reports git working trees, leading with the ones that would lose
 // work. A repository with no remote, or with commits that were never pushed,
 // exists only on the machine being replaced.
@@ -617,6 +688,11 @@ func printRepos(repos []bundle.Repo, unredacted, verbose bool) {
 
 	if len(atRisk) > 0 {
 		fmt.Printf("\n  %d hold work that exists nowhere else. Deal with these BEFORE you wipe\n  the old machine:\n", len(atRisk))
+		var paths []string
+		for _, r := range atRisk {
+			paths = append(paths, r.Path)
+		}
+		width := column(paths, 46, 60)
 		for _, r := range atRisk {
 			var why []string
 			if r.NoRemote {
@@ -631,17 +707,22 @@ func printRepos(repos []bundle.Repo, unredacted, verbose bool) {
 			if r.NoUpstream && !r.NoRemote {
 				why = append(why, "branch tracks no upstream")
 			}
-			fmt.Printf("    %-46s %s\n", r.Path, strings.Join(why, ", "))
+			fmt.Printf("    %-*s %s\n", width, r.Path, strings.Join(why, ", "))
 		}
 	}
 	if verbose {
 		fmt.Println("\n  All repositories:")
+		var paths []string
+		for _, r := range repos {
+			paths = append(paths, r.Path)
+		}
+		width := column(paths, 46, 60)
 		for _, r := range repos {
 			remote := redact.Apply(r.Remote, unredacted)
 			if r.Remote == "" {
 				remote = "(no remote)"
 			}
-			fmt.Printf("    %-46s %s\n", r.Path, remote)
+			fmt.Printf("    %-*s %s\n", width, r.Path, remote)
 		}
 	}
 }
@@ -689,14 +770,24 @@ func cmdInspect(f *flags) error {
 	if n := len(man.Repos); n > 0 {
 		fmt.Printf("Repos:      %d (%d with work that exists nowhere else)\n", n, len(capture.RepoRisks(man.Repos)))
 	}
+	if n, from := countNamespaced(man.System.Extensions); n > 0 {
+		fmt.Printf("Extensions: %d (%s)\n", n, strings.Join(from, ", "))
+	}
+	if n, from := countNamespaced(man.System.Toolchains); n > 0 {
+		fmt.Printf("Packages:   %d (%s)\n", n, strings.Join(from, ", "))
+	}
 
 	if len(man.Applications) > 0 {
 		printApplications(man.Applications, man.Brewfile != nil, f.verbose)
 	}
 	if len(man.Repos) > 0 {
 		printRepos(man.Repos, f.unredacted, f.verbose)
-		printMCPServers(man.System.MCPServers)
 	}
+	// Not nested under the repositories above: a bundle from a machine with no
+	// git checkouts still has MCP servers worth rebuilding, and hiding them
+	// behind an unrelated condition is how an inventory quietly loses an entry.
+	printMCPServers(man.System.MCPServers)
+	printSystemInventory(man.System, f.verbose)
 
 	fmt.Println()
 	fmt.Print(scanner.Summary(man.ScanFindings))

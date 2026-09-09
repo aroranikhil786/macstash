@@ -224,6 +224,13 @@ func toolchainInstallArgs(manager, pkg string) []string {
 }
 
 // RestoreExtensions reinstalls editor extensions.
+//
+// Two things it will not do quietly. If the editor's command-line tool is not
+// on PATH it prints the ids rather than only the count, because a bare "47
+// extension(s), not installed" leaves nothing to act on and the list is the
+// whole reason they were captured. And a failed install is counted and named:
+// the exit status used to be discarded, so a run where every extension failed
+// looked exactly like a run where every one succeeded.
 func (p *Plan) RestoreExtensions(out io.Writer, apply bool) {
 	ext := p.Manifest.System.Extensions
 	if len(ext) == 0 {
@@ -241,15 +248,26 @@ func (p *Plan) RestoreExtensions(out io.Writer, apply bool) {
 		ids := ext[editor]
 		fmt.Fprintf(out, "  %-14s %d extension(s)\n", editor, len(ids))
 		if !commandAvailable(editor) {
-			fmt.Fprintf(out, "  %-14s (%s is not on PATH here)\n", "", editor)
+			fmt.Fprintf(out, "  %-14s (%s is not on PATH here — install these by hand, or add\n"+
+				"  %-14s  the shell command from the editor and re-run)\n", "", editor, "")
+			for _, id := range ids {
+				fmt.Fprintf(out, "    %s\n", id)
+			}
 			continue
 		}
 		if !apply {
 			continue
 		}
+		var failed []string
 		for _, id := range ids {
 			cmd := exec.Command(editor, "--install-extension", id, "--force")
-			_ = cmd.Run()
+			if err := cmd.Run(); err != nil {
+				failed = append(failed, id)
+			}
+		}
+		fmt.Fprintf(out, "  %-14s installed %d, failed %d\n", "", len(ids)-len(failed), len(failed))
+		for _, id := range failed {
+			fmt.Fprintf(out, "    failed: %s\n", id)
 		}
 	}
 }

@@ -483,3 +483,37 @@ func TestAppSummaryNeverCallsACaskableAppManual(t *testing.T) {
 		t.Errorf("by hand = %d, want 0 — Homebrew can install it", manual)
 	}
 }
+
+func TestCountNamespacedTotalsAndNamesTheManagers(t *testing.T) {
+	n, from := countNamespaced(map[string][]string{
+		"npm": {"a", "b", "c"},
+		"uv":  {"d"},
+	})
+
+	if n != 4 {
+		t.Errorf("total = %d, want 4", n)
+	}
+	if len(from) != 2 || from[0] != "npm" || from[1] != "uv" {
+		t.Errorf("managers = %v, want [npm uv] in order", from)
+	}
+}
+
+func TestCountNamespacedOfNothingIsZero(t *testing.T) {
+	if n, from := countNamespaced(nil); n != 0 || len(from) != 0 {
+		t.Errorf("got %d %v, want 0 and no names", n, from)
+	}
+}
+
+// The column must widen for a long label and stop widening at the cap, or one
+// pathological name pushes every other row off the screen.
+func TestColumnFitsTheLongestLabelUpToTheCap(t *testing.T) {
+	if got := column([]string{"short", "tiny"}, 32, 44); got != 32 {
+		t.Errorf("short labels should keep the minimum, got %d", got)
+	}
+	if got := column([]string{strings.Repeat("x", 38)}, 32, 44); got != 38 {
+		t.Errorf("a long label should widen the column, got %d", got)
+	}
+	if got := column([]string{strings.Repeat("x", 200)}, 32, 44); got != 44 {
+		t.Errorf("the cap should hold, got %d", got)
+	}
+}
