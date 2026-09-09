@@ -25,7 +25,7 @@ func CloneRepos(home string, repos []bundle.Repo, apply bool, out io.Writer) err
 		return nil
 	}
 
-	var cloned, skipped, failed, noRemote int
+	var cloned, skipped, failed, noRemote, unpushed int
 	for _, r := range repos {
 		dest := expandHome(home, r.Path)
 
@@ -49,21 +49,38 @@ func CloneRepos(home string, repos []bundle.Repo, apply bool, out io.Writer) err
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return err
 		}
-		args := []string{"clone"}
-		if r.Branch != "" && r.Branch != "HEAD" {
-			args = append(args, "--branch", r.Branch)
-		}
-		args = append(args, r.Remote, dest)
 
-		cmd := exec.Command("git", args...)
-		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-		cmd.Stdout, cmd.Stderr = out, out
-		if err := cmd.Run(); err != nil {
+		// The recorded branch may never have been pushed. git clone --branch
+		// fails outright when the remote has no such branch, which skips the
+		// whole repository and loses the code along with the branch — the
+		// opposite of what someone re-cloning 45 repositories wants. So the
+		// second attempt takes the remote's default branch.
+		//
+		// dest did not exist a moment ago, checked above, so clearing a partial
+		// clone before retrying cannot remove anything that was already here.
+		output, err := gitClone(r.Remote, dest, r.Branch)
+		var fellBack bool
+		if err != nil && r.Branch != "" && r.Branch != "HEAD" {
+			os.RemoveAll(dest)
+			if output, err = gitClone(r.Remote, dest, ""); err == nil {
+				fellBack = true
+			}
+		}
+		if err != nil {
 			failed++
-			fmt.Fprintf(out, "  FAIL  %s (%v)\n", r.Path, err)
+			fmt.Fprintf(out, "  FAIL  %s\n", r.Path)
+			if line := gitError(output); line != "" {
+				fmt.Fprintf(out, "        %s\n", line)
+			}
 			continue
 		}
 		cloned++
+		if fellBack {
+			unpushed++
+			fmt.Fprintf(out, "  ok    %s\n        on the default branch: %q was never pushed, so its\n"+
+				"        commits are only on the old machine\n", r.Path, r.Branch)
+			continue
+		}
 		fmt.Fprintf(out, "  ok    %s\n", r.Path)
 	}
 
@@ -76,7 +93,42 @@ func CloneRepos(home string, repos []bundle.Repo, apply bool, out io.Writer) err
 	if noRemote > 0 {
 		fmt.Fprintf(out, "\n%d repository(ies) had no remote. If the old machine is still alive, copy\nthem across by hand — nothing else can recover them.\n", noRemote)
 	}
+	if unpushed > 0 {
+		fmt.Fprintf(out, "\n%d repository(ies) came back on the default branch because the branch you\nwere on was never pushed. Those commits exist only on the old machine.\n", unpushed)
+	}
 	return nil
+}
+
+// gitClone runs one clone attempt, capturing output so a first failure that is
+// about to be retried does not print a wall of git noise.
+func gitClone(remote, dest, branch string) (string, error) {
+	args := []string{"clone"}
+	if branch != "" && branch != "HEAD" {
+		args = append(args, "--branch", branch)
+	}
+	args = append(args, remote, dest)
+
+	cmd := exec.Command("git", args...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// gitError picks the line of git output that says what went wrong. git puts its
+// diagnosis last, after the progress chatter, which is the opposite of brew.
+func gitError(output string) string {
+	var last string
+	for _, line := range strings.Split(output, "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" {
+			continue
+		}
+		if strings.HasPrefix(t, "fatal:") || strings.HasPrefix(t, "error:") {
+			return t
+		}
+		last = t
+	}
+	return last
 }
 
 func expandHome(home, p string) string {

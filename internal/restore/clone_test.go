@@ -220,3 +220,110 @@ func TestExpandHomeOnlyRewritesTheTildePrefix(t *testing.T) {
 		}
 	}
 }
+
+// bareRepoWithBranches makes a remote holding only the branches named, so a
+// clone of anything else fails exactly as it would against GitHub.
+func bareRepoWithBranches(t *testing.T, branches ...string) string {
+	t.Helper()
+	work := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = work
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@e",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@e")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q", "-b", branches[0], ".")
+	if err := os.WriteFile(filepath.Join(work, "README"), []byte("hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "README")
+	run("commit", "-qm", "first")
+	for _, b := range branches[1:] {
+		run("branch", b)
+	}
+
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	cmd := exec.Command("git", "clone", "-q", "--bare", work, bare)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("bare clone: %v\n%s", err, out)
+	}
+	return bare
+}
+
+// A branch that only ever existed locally used to fail the clone outright,
+// which lost the repository as well as the branch. Coming back on the default
+// branch is strictly better: the code arrives, and the report says what did not.
+func TestALocalOnlyBranchStillClonesTheRepository(t *testing.T) {
+	remote := bareRepoWithBranches(t, "main")
+	home := t.TempDir()
+	var buf bytes.Buffer
+
+	err := CloneRepos(home, []bundle.Repo{
+		{Path: "~/work/thing", Remote: remote, Branch: "never-pushed"},
+	}, true, &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(home, "work", "thing", "README")); err != nil {
+		t.Fatalf("the repository was not cloned: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "cloned 1") {
+		t.Errorf("want it counted as cloned, got:\n%s", out)
+	}
+	// The user has to learn those commits are still on the old machine.
+	if !strings.Contains(out, "never pushed") {
+		t.Errorf("want the unpushed branch called out, got:\n%s", out)
+	}
+}
+
+// The recorded branch is still preferred when the remote actually has it.
+func TestTheRecordedBranchIsUsedWhenItExists(t *testing.T) {
+	remote := bareRepoWithBranches(t, "main", "feature")
+	home := t.TempDir()
+	var buf bytes.Buffer
+
+	if err := CloneRepos(home, []bundle.Repo{
+		{Path: "~/work/thing", Remote: remote, Branch: "feature"},
+	}, true, &buf); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("git", "-C", filepath.Join(home, "work", "thing"), "branch", "--show-current")
+	got, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(got)) != "feature" {
+		t.Errorf("on branch %q, want feature", strings.TrimSpace(string(got)))
+	}
+	if strings.Contains(buf.String(), "never pushed") {
+		t.Error("the branch existed; nothing should be reported as unpushed")
+	}
+}
+
+// A clone that fails for a real reason must still fail, and say why.
+func TestACloneThatCannotWorkStillFails(t *testing.T) {
+	home := t.TempDir()
+	var buf bytes.Buffer
+
+	if err := CloneRepos(home, []bundle.Repo{
+		{Path: "~/work/gone", Remote: filepath.Join(t.TempDir(), "no-such-repo.git"), Branch: "main"},
+	}, true, &buf); err != nil {
+		t.Fatal(err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "failed 1") {
+		t.Errorf("want the failure counted, got:\n%s", out)
+	}
+	if !strings.Contains(out, "fatal:") {
+		t.Errorf("want git's own reason shown, got:\n%s", out)
+	}
+}
