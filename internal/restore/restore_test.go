@@ -293,3 +293,52 @@ func TestRestoreDoesNotAddExecuteBitToConfig(t *testing.T) {
 		t.Errorf(".zshrc became executable: %v", info.Mode().Perm())
 	}
 }
+
+// An empty file in the bundle carries nothing, so writing it over a file that
+// has content is pure loss. A real migration hit this: an empty .zprofile from
+// the old machine replaced one holding the Homebrew PATH line.
+func TestEmptyBundleFileDoesNotWipeALiveOne(t *testing.T) {
+	home := sourceHome(t)
+	for rel, content := range map[string]string{".zprofile": "", ".zshenv": ""} {
+		if err := os.WriteFile(filepath.Join(home, rel), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	archive := buildBundle(t, home)
+
+	dest := t.TempDir()
+	live := "eval \"$(/opt/homebrew/bin/brew shellenv)\"\n"
+	if err := os.WriteFile(filepath.Join(dest, ".zprofile"), []byte(live), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	p, cleanup, err := Prepare(archive, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	byRel := map[string]Action{}
+	for _, a := range p.Actions {
+		byRel[a.Rel] = a
+	}
+	if got := byRel[".zprofile"]; got.Kind != Refused || got.Reason == "" {
+		t.Errorf(".zprofile = %+v, want a refusal with a reason", got)
+	}
+	// An empty file with nothing to lose is still worth creating: a zero-byte
+	// file whose existence is the point, like .hushlogin, must still arrive.
+	if got := byRel[".zshenv"]; got.Kind != Create {
+		t.Errorf(".zshenv = %q, want create", got.Kind)
+	}
+
+	if err := p.Apply(dest, "run1", io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(filepath.Join(dest, ".zprofile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != live {
+		t.Errorf(".zprofile = %q after apply, want the live content untouched", after)
+	}
+}

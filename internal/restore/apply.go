@@ -129,9 +129,27 @@ func Prepare(archive, home string) (*Plan, func(), error) {
 
 		kind := Create
 		if live, err := os.ReadFile(filepath.Join(home, filepath.FromSlash(item.Rel))); err == nil {
-			if bytes.Equal(live, content) {
+			switch {
+			case bytes.Equal(live, content):
 				kind = Unchanged
-			} else {
+			case len(content) == 0 && len(live) > 0:
+				// An empty file has nothing to restore, so writing it over a file
+				// that has content can only destroy. This is not hypothetical: a
+				// migration replaced a .zprofile holding the Homebrew shellenv
+				// line with the empty one from the old machine, and brew left the
+				// PATH of every new login shell. The backup held it, but the plan
+				// said "overwrite" and gave no hint that the incoming side was
+				// blank.
+				//
+				// Creating an empty file is still allowed. A zero-byte file whose
+				// existence is the whole point — .hushlogin is the usual one — has
+				// no live content to lose.
+				p.Actions = append(p.Actions, Action{
+					Rel: item.Rel, Kind: Refused, Class: item.Class, Mode: item.Mode,
+					Reason: "empty in the bundle but not here; keeping what this machine has",
+				})
+				continue
+			default:
 				kind = Overwrite
 			}
 		}
