@@ -32,7 +32,7 @@ import (
 // -ldflags "-X main.Version=...". It must stay a var: the Go linker silently
 // ignores -X on a const, so declaring it const would ship every release
 // labelled 0.1.0-dev, and record that wrong version in every bundle manifest.
-var Version = "0.2.3-dev"
+var Version = "0.2.4-dev"
 
 const usage = `macstash — capture a macOS development environment and rebuild it elsewhere
 
