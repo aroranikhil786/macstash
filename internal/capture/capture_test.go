@@ -161,12 +161,14 @@ func TestUsefulConfigIsCaptured(t *testing.T) {
 
 // A public .pub key is exactly the kind of thing worth carrying across, and sits
 // one directory away from material that must never move. Both outcomes matter.
-func TestSSHPublicKeyKeptPrivateKeyExcluded(t *testing.T) {
+func TestNeitherHalfOfAnSSHKeyIsCaptured(t *testing.T) {
 	home := fixtureHome(t)
 	dir, man := captureInto(t, home)
 
-	if _, err := os.Stat(filepath.Join(dir, "home/.ssh/id_ed25519")); !os.IsNotExist(err) {
-		t.Error("the SSH private key was captured")
+	for _, rel := range []string{"home/.ssh/id_ed25519", "home/.ssh/id_ed25519.pub"} {
+		if _, err := os.Stat(filepath.Join(dir, rel)); !os.IsNotExist(err) {
+			t.Errorf("%s was captured", rel)
+		}
 	}
 	excluded := map[string]string{}
 	for _, e := range man.Excluded {
@@ -176,6 +178,15 @@ func TestSSHPublicKeyKeptPrivateKeyExcluded(t *testing.T) {
 		if _, ok := excluded[rel]; !ok {
 			t.Errorf("%s was not recorded as excluded; the user has no way to know it was seen and skipped", rel)
 		}
+	}
+	// The public key is left behind for a different reason than the private one,
+	// and saying "key material" about a public key would be false.
+	reason, ok := excluded[".ssh/id_ed25519.pub"]
+	if !ok {
+		t.Fatal("the public key was skipped without saying so")
+	}
+	if strings.Contains(reason, "key material") {
+		t.Errorf("public key excluded as %q, which misdescribes it", reason)
 	}
 }
 

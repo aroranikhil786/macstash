@@ -151,11 +151,48 @@ type System struct {
 	// MCPServers is which MCP servers were configured, never how. The config
 	// files themselves are on the never list.
 	MCPServers []MCPServer `json:"mcp_servers,omitempty"`
+	// SSHKeys identifies the keys that were on the old machine. Neither half of
+	// a keypair is carried — a fingerprint is a hash of a public key, and it is
+	// the only thing that still names which key to revoke once that machine is
+	// gone.
+	SSHKeys []SSHKey `json:"ssh_keys,omitempty"`
+	// SSHHosts is where those keys were used, so the new key can be added
+	// everywhere the old one was trusted.
+	SSHHosts []SSHHost `json:"ssh_hosts,omitempty"`
+	// SSHHostsHidden counts known_hosts entries whose hostnames are hashed and
+	// therefore unreadable. Reported so the host list is never mistaken for a
+	// complete one.
+	SSHHostsHidden int `json:"ssh_hosts_hidden,omitempty"`
 	// Prefs are exported preference domains, catalog-named only.
 	Prefs []string `json:"exported_pref_domains,omitempty"`
 	// PrefOwners maps a catalog entry id to the preference domains it owns, so
 	// restore can tell whether a domain belongs to an app that must be quit.
 	PrefOwners map[string][]string `json:"pref_owners,omitempty"`
+}
+
+// SSHKey identifies a key that existed on the old machine. The key material is
+// not here: a public key cannot authenticate without its private half, and
+// restoring one makes a new machine look as though it has a working key when it
+// does not.
+type SSHKey struct {
+	Name        string `json:"name"`
+	Type        string `json:"type,omitempty"`
+	Fingerprint string `json:"fingerprint"`
+	Comment     string `json:"comment,omitempty"`
+	// HasPrivate records whether a private key file sat beside this one. Where
+	// none did, the private half is held by an agent or a hardware token, and
+	// the key may be re-enrolled rather than regenerated.
+	HasPrivate bool `json:"has_private,omitempty"`
+}
+
+// SSHHost is somewhere an SSH key was used, and how that was discovered.
+type SSHHost struct {
+	Host     string   `json:"host"`
+	Sources  []string `json:"sources,omitempty"`
+	User     string   `json:"user,omitempty"`
+	Identity string   `json:"identity,omitempty"`
+	// Repos is how many captured repositories clone from this host over SSH.
+	Repos int `json:"repos,omitempty"`
 }
 
 // MCPServer is one configured MCP server, reduced to the facts that carry no

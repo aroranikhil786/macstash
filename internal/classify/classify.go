@@ -80,7 +80,19 @@ func IsNever(rel string) (bool, string) {
 	// default-deny is the only rule that stays correct as people name their keys
 	// whatever they like.
 	if strings.HasPrefix(rel, ".ssh/") {
-		if !sshAllowed(strings.TrimPrefix(rel, ".ssh/")) {
+		name := strings.TrimPrefix(rel, ".ssh/")
+		// Public keys used to come across, on the reasoning that they are what
+		// you paste back into GitHub. That reasoning is wrong: the private half
+		// stays on the old machine, so the key you would be re-authorising is
+		// one you are about to lose control of. The correct move is to generate
+		// a new key here, and the old key's fingerprint — recorded in the
+		// manifest, a hash rather than a credential — is what names the one to
+		// revoke. Copying the file only makes ~/.ssh look like it has a working
+		// key.
+		if strings.HasSuffix(name, ".pub") {
+			return true, "public key — a new key is generated on the new machine instead"
+		}
+		if !sshAllowed(name) {
 			return true, "unrecognised file in ~/.ssh, treated as key material"
 		}
 	}
@@ -88,14 +100,12 @@ func IsNever(rel string) (bool, string) {
 }
 
 // sshAllowed reports whether a path within ~/.ssh is one of the few things worth
-// carrying to a new machine. Public keys, the config and the host database are
-// useful and harmless; anything else is assumed to be a secret.
+// carrying to a new machine. The config and the host database are useful and
+// harmless; anything else is assumed to be a secret. Public keys are handled by
+// the caller and are not carried at all.
 func sshAllowed(name string) bool {
 	switch name {
 	case "config", "known_hosts", "known_hosts.old", "authorized_keys":
-		return true
-	}
-	if strings.HasSuffix(name, ".pub") {
 		return true
 	}
 	// ~/.ssh/config.d/* is a common Include target and is configuration.

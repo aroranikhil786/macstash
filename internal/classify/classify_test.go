@@ -3,6 +3,7 @@ package classify
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -30,7 +31,7 @@ func TestIsNever(t *testing.T) {
 		// SSH: private keys out, public keys and config in.
 		{".ssh/id_ed25519", true},
 		{".ssh/id_rsa", true},
-		{".ssh/id_ed25519.pub", false},
+		{".ssh/id_ed25519.pub", true},
 		{".ssh/config", false},
 		{".ssh/known_hosts", false},
 
@@ -63,6 +64,28 @@ func TestIsNever(t *testing.T) {
 		}
 		if got && reason == "" {
 			t.Errorf("IsNever(%q) excluded with no reason given", c.rel)
+		}
+	}
+}
+
+// Public keys are not carried. The private half stays behind, so restoring the
+// public half authorises nothing and only makes ~/.ssh look as though a working
+// key is there — while the fingerprint recorded in the manifest still names the
+// key to revoke.
+func TestPublicKeysAreNotCarried(t *testing.T) {
+	for _, rel := range []string{
+		".ssh/id_ed25519.pub",
+		".ssh/id_rsa.pub",
+		".ssh/my_new_key.pub",
+	} {
+		never, reason := IsNever(rel)
+		if !never {
+			t.Errorf("IsNever(%q) = false, want the public key left behind", rel)
+		}
+		// The reason is printed to the user, and "treated as key material" would
+		// be a lie about a public key.
+		if strings.Contains(reason, "key material") {
+			t.Errorf("IsNever(%q) reason %q misdescribes a public key", rel, reason)
 		}
 	}
 }
@@ -166,8 +189,6 @@ func TestSSHDirectoryIsDefaultDeny(t *testing.T) {
 		".ssh/config",
 		".ssh/known_hosts",
 		".ssh/known_hosts.old",
-		".ssh/my_new_key.pub",
-		".ssh/id_ed25519.pub",
 		".ssh/authorized_keys",
 		".ssh/config.d/work",
 	}

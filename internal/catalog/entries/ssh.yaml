@@ -6,10 +6,12 @@ detect:
 capture:
   paths:
   # Naming the directory is safe only because ~/.ssh is default-deny in the
-  # never list: config, known_hosts and *.pub come through, and everything else
-  # is treated as key material regardless of what it is called. Capturing the
-  # public keys matters — they are what you paste back into GitHub and your
-  # servers, and hunting them down again is a genuinely annoying afternoon.
+  # never list: config and known_hosts come through, and everything else is
+  # treated as key material regardless of what it is called. Public keys are not
+  # carried either — the private half stays behind, so re-authorising the public
+  # half would trust a key you are about to lose control of. What replaces them
+  # is a fingerprint in the manifest and the list of hosts that trusted the key,
+  # which is the part that is actually hard to reconstruct.
   - path: ~/.ssh
     class: public
     skip:
@@ -17,6 +19,8 @@ capture:
       - "*.sock"
 restore:
   note: |
-    Private keys are never captured. Your public keys and config came across, but
-    each key needs regenerating on this machine and re-adding to the services that
-    trust it — GitHub, servers, anything using SSH auth.
+    No key material came across — not the private keys, and not the public ones
+    either, which authorise nothing without their private half. Your config and
+    known_hosts did. Generate a key here and add it wherever the old one was
+    trusted; the restore prints that list, along with the old fingerprints so
+    you know which keys to revoke once the old machine is gone.

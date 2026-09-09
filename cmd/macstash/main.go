@@ -427,6 +427,7 @@ func printCapturePlan(p *capture.Plan, unredacted, verbose bool) {
 	printApplications(p.Applications, p.BrewConsulted, verbose)
 	printRepos(p.Repos, unredacted, verbose)
 	printMCPServers(p.System.MCPServers)
+	printSSHKeys(p.System)
 
 	if len(p.Excluded) > 0 {
 		fmt.Printf("\nFound and deliberately not captured (%d):\n", len(p.Excluded))
@@ -664,6 +665,116 @@ func column(labels []string, min, max int) int {
 	return w
 }
 
+// keyPages are the places whose "add an SSH key" page is worth naming outright,
+// because they are where most of these lists end.
+var keyPages = map[string]string{
+	"github.com":    "github.com/settings/keys",
+	"gitlab.com":    "gitlab.com/-/user_settings/ssh_keys",
+	"bitbucket.org": "bitbucket.org/account/settings/ssh-keys/",
+}
+
+// printSSHKeys turns "your keys did not come with you" into a checklist.
+//
+// Neither half of a keypair is carried, so the new machine needs a new key, and
+// the work is not generating it — that is one command — but remembering every
+// server and service that trusted the old one. That list is reconstructed from
+// the SSH config, known_hosts and the SSH git remotes on the old machine, all
+// of which macstash already read. It is not complete and says so: a key
+// uploaded through a web interface and never used from that machine leaves no
+// local trace at all.
+func printSSHKeys(s bundle.System) {
+	if len(s.SSHKeys) == 0 && len(s.SSHHosts) == 0 {
+		return
+	}
+
+	var regenerate, enrolled []bundle.SSHKey
+	for _, k := range s.SSHKeys {
+		if k.HasPrivate {
+			regenerate = append(regenerate, k)
+		} else {
+			enrolled = append(enrolled, k)
+		}
+	}
+
+	fmt.Printf("\nSSH keys: %d found on the old machine. Neither the private key nor the\n"+
+		"          public key is carried — a public key cannot authenticate without\n"+
+		"          its private half, and copying it would only make ~/.ssh look as\n"+
+		"          though a working key were here.\n", len(s.SSHKeys))
+
+	if len(regenerate) > 0 {
+		fmt.Printf("\n  Generate a key here:\n"+
+			"    ssh-keygen -t ed25519 -C \"%s\"\n"+
+			"    pbcopy < ~/.ssh/id_ed25519.pub\n", keyComment(regenerate))
+		fmt.Printf("\n  Then revoke the old key(s) once that machine is decommissioned. These\n" +
+			"  fingerprints are what identify them:\n")
+		for _, k := range regenerate {
+			fmt.Printf("    %-16s %-8s %s\n", k.Name, k.Type, k.Fingerprint)
+			if k.Comment != "" {
+				fmt.Printf("    %-16s %s\n", "", k.Comment)
+			}
+		}
+	}
+
+	// A public key with no private key file beside it was never a file: the
+	// private half lives in an agent or a hardware token, and telling someone to
+	// regenerate it would be wrong.
+	for _, k := range enrolled {
+		fmt.Printf("\n  %s had no private key file beside it, so its private half is held by\n"+
+			"  an agent or a hardware token (1Password, Secretive, a YubiKey). Set that\n"+
+			"  up here rather than generating a new key.\n"+
+			"    %-8s %s\n", k.Name, k.Type, k.Fingerprint)
+	}
+
+	if len(s.SSHHosts) == 0 {
+		return
+	}
+	// Hostnames are printed rather than redacted, unlike git remotes. A redacted
+	// checklist cannot be worked through, which is the only thing this section
+	// is for. It is labelled instead, the same way the repository paths are.
+	fmt.Printf("\n  Add the new key wherever the old one was trusted. These are servers you\n" +
+		"  reach, so treat the list as internal. It comes from the SSH config,\n" +
+		"  known_hosts and git remotes on the old machine, and cannot see a key\n" +
+		"  uploaded through a web page but never used from there, or a\n" +
+		"  per-repository deploy key:\n")
+
+	var hosts []string
+	for _, h := range s.SSHHosts {
+		hosts = append(hosts, h.Host)
+	}
+	width := column(hosts, 24, 40)
+	for _, h := range s.SSHHosts {
+		fmt.Printf("    %-*s %s\n", width, h.Host, strings.Join(h.Sources, ", "))
+		var detail []string
+		if h.User != "" {
+			detail = append(detail, "user "+h.User)
+		}
+		if h.Identity != "" {
+			detail = append(detail, "IdentityFile "+h.Identity)
+		}
+		if len(detail) > 0 {
+			fmt.Printf("    %-*s %s\n", width, "", strings.Join(detail, ", "))
+		}
+		if page, ok := keyPages[strings.ToLower(h.Host)]; ok {
+			fmt.Printf("    %-*s -> %s\n", width, "", page)
+		}
+	}
+	if s.SSHHostsHidden > 0 {
+		fmt.Printf("\n  %d more known_hosts entry(s) have hashed hostnames, which cannot be\n"+
+			"  read back. The list above is not complete.\n", s.SSHHostsHidden)
+	}
+}
+
+// keyComment reuses the comment already on a key, which is usually
+// user@oldmachine and is what makes a key identifiable in a list of them.
+func keyComment(keys []bundle.SSHKey) string {
+	for _, k := range keys {
+		if strings.Contains(k.Comment, "@") {
+			return k.Comment
+		}
+	}
+	return "your@email"
+}
+
 // printRepos reports git working trees, leading with the ones that would lose
 // work. A repository with no remote, or with commits that were never pushed,
 // exists only on the machine being replaced.
@@ -787,6 +898,7 @@ func cmdInspect(f *flags) error {
 	// git checkouts still has MCP servers worth rebuilding, and hiding them
 	// behind an unrelated condition is how an inventory quietly loses an entry.
 	printMCPServers(man.System.MCPServers)
+	printSSHKeys(man.System)
 	printSystemInventory(man.System, f.verbose)
 
 	fmt.Println()
@@ -928,6 +1040,7 @@ func cmdRestore(f *flags) error {
 			}
 		}
 		p.ReportOnly(os.Stdout)
+		printSSHKeys(p.Manifest.System)
 		// No offerBundleDeletion here. --plan must not change anything, and
 		// offering a destructive action from a dry run is exactly the kind of
 		// surprise the flag exists to rule out.
@@ -979,6 +1092,9 @@ func cmdRestore(f *flags) error {
 		return err
 	}
 	p.ReportOnly(os.Stdout)
+	// Before cloning, deliberately: the repositories below need a working key,
+	// and being told how to make one after the clones have failed is too late.
+	printSSHKeys(p.Manifest.System)
 
 	// Cloning is last on purpose: it is the only step that needs credentials
 	// macstash deliberately never captured, so it is the most likely to fail and

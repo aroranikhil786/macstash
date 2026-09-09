@@ -132,6 +132,7 @@ func Scan(home string, entries []catalog.Entry) (*Plan, error) {
 	p.BrewConsulted = brewKnown
 	p.Repos = ScanRepos(home, 4)
 	p.System = ScanSystem(home)
+	p.System.SSHKeys, p.System.SSHHosts, p.System.SSHHostsHidden = ScanSSHUsage(home, p.Repos)
 	p.Management = DetectManagement()
 	p.LaunchAgents = ScanLaunchAgents(home)
 	p.exportPrefs(entries)

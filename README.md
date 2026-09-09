@@ -170,6 +170,26 @@ To reinstall one anyway, re-enable its line under `restore --select`.
 Git remotes and tap URLs are hidden by default, because terminal output gets
 screenshotted. `--unredacted` shows them.
 
+### SSH keys
+
+Neither half of a keypair is carried. The private key obviously stays behind;
+the public key is left behind too, because it authorises nothing without its
+private half and restoring it only makes `~/.ssh` look as though a working key
+is there. Re-authorising the old public key on the new machine would be worse
+than useless — it trusts a key whose private half is on the machine you are
+about to wipe.
+
+What replaces it is the part that is genuinely hard to reconstruct: the
+fingerprint of each old key, so you know which one to revoke, and a list of
+everywhere the key was used, assembled from your SSH config, `known_hosts` and
+the SSH git remotes macstash already recorded. https remotes are excluded from
+that list — they authenticate with a token and do not care about your key.
+
+The list is not complete and says so. A key uploaded through a web page but
+never used from that machine leaves no local trace, and `known_hosts` entries
+with hashed hostnames cannot be read back, so they are counted rather than
+quietly dropped.
+
 ### Things that are listed, never copied
 
 Repositories, applications, Docker images, SDK versions and MCP servers are
