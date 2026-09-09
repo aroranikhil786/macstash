@@ -269,12 +269,20 @@ func parseKnownHosts(path string) (hosts []string, hashed int) {
 				continue
 			}
 		}
+		// A real entry is "host keytype key". Requiring the key type rejects the
+		// tail of a wrapped line, which is otherwise indistinguishable from a
+		// hostname: taking field one of every line turned the base64 remainder of
+		// a long key into five "servers" on the first machine with a wrapped
+		// known_hosts.
+		if len(fields) < 3 || !isKeyType(fields[1]) {
+			continue
+		}
 		if strings.HasPrefix(fields[0], "|") {
 			hashed++
 			continue
 		}
 		for _, h := range strings.Split(fields[0], ",") {
-			if h = normaliseHost(h); h != "" && !seen[h] {
+			if h = normaliseHost(h); ValidHostname(h) && !seen[h] {
 				seen[h] = true
 				hosts = append(hosts, h)
 			}
@@ -282,6 +290,38 @@ func parseKnownHosts(path string) (hosts []string, hashed int) {
 	}
 	sort.Strings(hosts)
 	return hosts, hashed
+}
+
+// isKeyType reports whether a field is an SSH public key algorithm name, which
+// is what sits between the host and the key in every known_hosts entry.
+func isKeyType(s string) bool {
+	for _, prefix := range []string{"ssh-", "ecdsa-", "sk-", "webauthn-"} {
+		if strings.HasPrefix(s, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidHostname reports whether a string can be a hostname or an address.
+//
+// Exported so a bundle written before this check existed can still be displayed
+// without its bad entries: re-capturing to clean up a printed list is not a
+// trade worth asking anyone to make.
+func ValidHostname(h string) bool {
+	if h == "" || len(h) > 253 {
+		return false
+	}
+	for _, r := range h {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.', r == '-', r == '_', r == ':':
+		default:
+			// '/', '+' and '=' are base64, and none of them can appear in a host.
+			return false
+		}
+	}
+	return true
 }
 
 // normaliseHost strips the [host]:port form known_hosts uses for non-default

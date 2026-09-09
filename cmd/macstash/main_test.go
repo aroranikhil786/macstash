@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -515,5 +516,79 @@ func TestColumnFitsTheLongestLabelUpToTheCap(t *testing.T) {
 	}
 	if got := column([]string{strings.Repeat("x", 200)}, 32, 44); got != 44 {
 		t.Errorf("the cap should hold, got %d", got)
+	}
+}
+
+// 168 hostnames under one company domain buried everything printed after them.
+// The ones with an action attached must survive; the rest are counted.
+func TestGroupHostsCountsTheBulkAndNamesTheActionable(t *testing.T) {
+	hosts := []bundle.SSHHost{
+		{Host: "github.com", Sources: []string{"known_hosts", "45 repository(s)"}, Repos: 45},
+		{Host: "tveportal01.tivo.com", Sources: []string{"known_hosts", "ssh config"}, Identity: "id_rsa"},
+		{Host: "corpbuild22", Sources: []string{"known_hosts"}},
+		{Host: "13.234.239.53", Sources: []string{"known_hosts"}},
+	}
+	for i := 0; i < 40; i++ {
+		hosts = append(hosts, bundle.SSHHost{
+			Host:    fmt.Sprintf("npvr-scheduler-%02d.mpa1.tivo.com", i),
+			Sources: []string{"known_hosts"},
+		})
+	}
+
+	named, grouped := groupHosts(hosts, false)
+
+	if grouped["tivo.com"] != 40 {
+		t.Errorf("grouped tivo.com = %d, want 40", grouped["tivo.com"])
+	}
+	byName := map[string]bool{}
+	for _, h := range named {
+		byName[h.Host] = true
+	}
+	// Repositories, an ssh config entry, a bare name and an address each have a
+	// reason to be named individually.
+	for _, want := range []string{"github.com", "tveportal01.tivo.com", "corpbuild22", "13.234.239.53"} {
+		if !byName[want] {
+			t.Errorf("%q should have been named, got %v", want, byName)
+		}
+	}
+	if named[0].Host != "github.com" {
+		t.Errorf("the host with repositories should lead, got %q", named[0].Host)
+	}
+}
+
+// --verbose is the escape hatch: everything, individually.
+func TestGroupHostsVerboseNamesEverything(t *testing.T) {
+	hosts := []bundle.SSHHost{
+		{Host: "a.example.com"}, {Host: "b.example.com"}, {Host: "c.example.com"},
+	}
+
+	named, grouped := groupHosts(hosts, true)
+
+	if len(named) != 3 || len(grouped) != 0 {
+		t.Errorf("named=%d grouped=%v, want all three named", len(named), grouped)
+	}
+}
+
+// A domain with one host behind it is not a group.
+func TestGroupHostsDoesNotGroupASingleHost(t *testing.T) {
+	named, grouped := groupHosts([]bundle.SSHHost{{Host: "only.example.com"}}, false)
+
+	if len(grouped) != 0 || len(named) != 1 || named[0].Host != "only.example.com" {
+		t.Errorf("named=%v grouped=%v, want the single host named", named, grouped)
+	}
+}
+
+func TestParentDomain(t *testing.T) {
+	cases := map[string]string{
+		"npvr-tracker-mp1-01.mpa1.tivo.com": "tivo.com",
+		"github.com":                        "",
+		"corpbuild22":                       "",
+		"13.234.239.53":                     "",
+		"::1":                               "",
+	}
+	for host, want := range cases {
+		if got := parentDomain(host); got != want {
+			t.Errorf("parentDomain(%q) = %q, want %q", host, got, want)
+		}
 	}
 }

@@ -427,7 +427,7 @@ func printCapturePlan(p *capture.Plan, unredacted, verbose bool) {
 	printApplications(p.Applications, p.BrewConsulted, verbose)
 	printRepos(p.Repos, unredacted, verbose)
 	printMCPServers(p.System.MCPServers)
-	printSSHKeys(p.System)
+	printSSHKeys(p.System, verbose)
 
 	if len(p.Excluded) > 0 {
 		fmt.Printf("\nFound and deliberately not captured (%d):\n", len(p.Excluded))
@@ -682,7 +682,7 @@ var keyPages = map[string]string{
 // of which macstash already read. It is not complete and says so: a key
 // uploaded through a web interface and never used from that machine leaves no
 // local trace at all.
-func printSSHKeys(s bundle.System) {
+func printSSHKeys(s bundle.System, verbose bool) {
 	if len(s.SSHKeys) == 0 && len(s.SSHHosts) == 0 {
 		return
 	}
@@ -737,12 +737,24 @@ func printSSHKeys(s bundle.System) {
 		"  uploaded through a web page but never used from there, or a\n" +
 		"  per-repository deploy key:\n")
 
-	var hosts []string
+	var usable []bundle.SSHHost
 	for _, h := range s.SSHHosts {
-		hosts = append(hosts, h.Host)
+		if capture.ValidHostname(h.Host) {
+			usable = append(usable, h)
+		}
 	}
-	width := column(hosts, 24, 40)
-	for _, h := range s.SSHHosts {
+	named, grouped := groupHosts(usable, verbose)
+
+	var labels []string
+	for _, h := range named {
+		labels = append(labels, h.Host)
+	}
+	for domain := range grouped {
+		labels = append(labels, "*."+domain)
+	}
+	width := column(labels, 24, 40)
+
+	for _, h := range named {
 		fmt.Printf("    %-*s %s\n", width, h.Host, strings.Join(h.Sources, ", "))
 		var detail []string
 		if h.User != "" {
@@ -758,10 +770,93 @@ func printSSHKeys(s bundle.System) {
 			fmt.Printf("    %-*s -> %s\n", width, "", page)
 		}
 	}
+	for _, domain := range sortedDomains(grouped) {
+		fmt.Printf("    %-*s %d host(s) in known_hosts (--verbose to list)\n",
+			width, "*."+domain, grouped[domain])
+	}
 	if s.SSHHostsHidden > 0 {
 		fmt.Printf("\n  %d more known_hosts entry(s) have hashed hostnames, which cannot be\n"+
 			"  read back. The list above is not complete.\n", s.SSHHostsHidden)
 	}
+}
+
+// groupHosts separates the hosts worth naming from the ones worth counting.
+//
+// A working machine reaches a lot of servers, and this list came back from one
+// with 168 of them under a single company domain. Printing them one per line
+// buried everything after it, including the permissions that need granting by
+// hand — and nobody adds a key to 168 servers by working down a list anyway;
+// they push it with configuration management. So anything known only from
+// known_hosts is counted by domain, while a host named in the SSH config or
+// holding repositories is always printed: those are the ones with a specific
+// action attached.
+func groupHosts(all []bundle.SSHHost, verbose bool) (named []bundle.SSHHost, grouped map[string]int) {
+	grouped = map[string]int{}
+	for _, h := range all {
+		domain := parentDomain(h.Host)
+		if verbose || h.Repos > 0 || h.User != "" || h.Identity != "" || len(h.Sources) > 1 || domain == "" {
+			named = append(named, h)
+			continue
+		}
+		grouped[domain]++
+	}
+	// A domain with a single host behind it is not a group; print it.
+	for domain, n := range grouped {
+		if n > 1 {
+			continue
+		}
+		delete(grouped, domain)
+		for _, h := range all {
+			if parentDomain(h.Host) == domain && !containsHost(named, h.Host) {
+				named = append(named, h)
+			}
+		}
+	}
+	sort.Slice(named, func(i, j int) bool {
+		if named[i].Repos != named[j].Repos {
+			return named[i].Repos > named[j].Repos
+		}
+		return named[i].Host < named[j].Host
+	})
+	return named, grouped
+}
+
+// parentDomain returns the registrable-looking suffix of a hostname, or "" for
+// a bare name or an address that should not be grouped with anything.
+func parentDomain(host string) string {
+	// Addresses group with nothing. Checked by shape rather than with net.ParseIP:
+	// the import-graph check denies every socket-capable package, and a hostname
+	// whose last label is numeric cannot be a domain anyway.
+	if strings.Contains(host, ":") {
+		return "" // IPv6
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) < 3 {
+		return ""
+	}
+	if last := parts[len(parts)-1]; strings.Trim(last, "0123456789") == "" {
+		return "" // IPv4
+	}
+	return strings.Join(parts[len(parts)-2:], ".")
+}
+
+// sortedDomains orders the grouped domains for printing.
+func sortedDomains(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func containsHost(hosts []bundle.SSHHost, name string) bool {
+	for _, h := range hosts {
+		if h.Host == name {
+			return true
+		}
+	}
+	return false
 }
 
 // keyComment reuses the comment already on a key, which is usually
@@ -898,7 +993,7 @@ func cmdInspect(f *flags) error {
 	// git checkouts still has MCP servers worth rebuilding, and hiding them
 	// behind an unrelated condition is how an inventory quietly loses an entry.
 	printMCPServers(man.System.MCPServers)
-	printSSHKeys(man.System)
+	printSSHKeys(man.System, f.verbose)
 	printSystemInventory(man.System, f.verbose)
 
 	fmt.Println()
@@ -1040,7 +1135,7 @@ func cmdRestore(f *flags) error {
 			}
 		}
 		p.ReportOnly(os.Stdout)
-		printSSHKeys(p.Manifest.System)
+		printSSHKeys(p.Manifest.System, f.verbose)
 		// No offerBundleDeletion here. --plan must not change anything, and
 		// offering a destructive action from a dry run is exactly the kind of
 		// surprise the flag exists to rule out.
@@ -1094,7 +1189,7 @@ func cmdRestore(f *flags) error {
 	p.ReportOnly(os.Stdout)
 	// Before cloning, deliberately: the repositories below need a working key,
 	// and being told how to make one after the clones have failed is too late.
-	printSSHKeys(p.Manifest.System)
+	printSSHKeys(p.Manifest.System, f.verbose)
 
 	// Cloning is last on purpose: it is the only step that needs credentials
 	// macstash deliberately never captured, so it is the most likely to fail and

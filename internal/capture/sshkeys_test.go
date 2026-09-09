@@ -226,3 +226,65 @@ func TestScanSSHUsageOnAMachineWithNoSSHDirectory(t *testing.T) {
 		t.Errorf("want nothing found, got %+v %+v %d", keys, hosts, hidden)
 	}
 }
+
+// A known_hosts file with wrapped lines: the tail of a long base64 key lands on
+// its own line and is indistinguishable from a hostname by position alone. The
+// first real machine with one produced five "servers" that were key fragments.
+func TestWrappedKeyLinesAreNotMistakenForHosts(t *testing.T) {
+	home := t.TempDir()
+	writeSSH(t, home, "known_hosts", strings.Join([]string{
+		"real-server.example.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB",
+		"NMpF5xS1eMXxsN+wUQ7jjxZXP+BLzmbWxi4pam27Qv+ro3+Ngv5wVkYy7Gk3rfLz+mme4JlrI78tAY=",
+		"C/MzJlVO8a8LJ6vKOok2uIjQGf+3UqF0veAIVgrXFycWFtrbGBcacYuBzmtDjwbzabnxdTDNxct96oW",
+		"another.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+	}, "\n"))
+
+	hosts, _ := parseKnownHosts(filepath.Join(home, ".ssh", "known_hosts"))
+
+	want := map[string]bool{"real-server.example.com": true, "another.example.com": true}
+	if len(hosts) != len(want) {
+		t.Fatalf("hosts = %v, want only %v", hosts, want)
+	}
+	for _, h := range hosts {
+		if !want[h] {
+			t.Errorf("%q is a key fragment, not a host", h)
+		}
+	}
+}
+
+// An entry without a key algorithm in the second field is not an entry.
+func TestKnownHostsRequiresAKeyType(t *testing.T) {
+	home := t.TempDir()
+	writeSSH(t, home, "known_hosts", strings.Join([]string{
+		"good.example.com ssh-rsa AAAAB3Nza",
+		"bare.example.com",
+		"two.example.com onlytwofields",
+		"cert.example.com ecdsa-sha2-nistp256 AAAAE2Vj",
+		"@cert-authority ca.example.com ssh-rsa AAAAB3Nza",
+	}, "\n"))
+
+	hosts, _ := parseKnownHosts(filepath.Join(home, ".ssh", "known_hosts"))
+
+	want := []string{"ca.example.com", "cert.example.com", "good.example.com"}
+	if len(hosts) != len(want) {
+		t.Fatalf("hosts = %v, want %v", hosts, want)
+	}
+	for i := range want {
+		if hosts[i] != want[i] {
+			t.Fatalf("hosts = %v, want %v", hosts, want)
+		}
+	}
+}
+
+func TestValidHostname(t *testing.T) {
+	for _, ok := range []string{"github.com", "npvr-tracker-mp1-01.mpa1.tivo.com", "corpbuild22", "13.234.239.53", "::1"} {
+		if !ValidHostname(ok) {
+			t.Errorf("ValidHostname(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"", "NMpF5xS1+wUQ7jjxZXP=", "a/b", "has space"} {
+		if ValidHostname(bad) {
+			t.Errorf("ValidHostname(%q) = true, want false", bad)
+		}
+	}
+}
