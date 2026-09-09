@@ -21,6 +21,7 @@ import (
 
 	"github.com/aroranikhil786/macstash/internal/bundle"
 	"github.com/aroranikhil786/macstash/internal/capture"
+	"github.com/aroranikhil786/macstash/internal/restore"
 )
 
 // Status is the outcome of one check.
@@ -65,6 +66,7 @@ func Run(home string, man *bundle.Manifest, deep bool) []Check {
 // checkFiles verifies captured files are present and unmodified.
 func checkFiles(home string, man *bundle.Manifest) []Check {
 	var checks []Check
+	var present int
 	for _, item := range man.Items {
 		path := filepath.Join(home, filepath.FromSlash(item.Rel))
 		data, err := os.ReadFile(path)
@@ -76,6 +78,7 @@ func checkFiles(home string, man *bundle.Manifest) []Check {
 			})
 			continue
 		}
+		present++
 		if item.SHA256 == "" {
 			continue
 		}
@@ -88,6 +91,9 @@ func checkFiles(home string, man *bundle.Manifest) []Check {
 				Detail: item.Rel + " has been edited since the restore",
 			})
 		}
+	}
+	if present > 0 {
+		checks = append(checks, verified("files", "%d restored file(s) still in place", present))
 	}
 	return checks
 }
@@ -128,6 +134,8 @@ func checkBrew(man *bundle.Manifest) []Check {
 			Detail: fmt.Sprintf("%d package(s) not installed: %s", len(missing), strings.Join(truncate(missing, 8), ", ")),
 			Fix:    "brew install " + strings.Join(truncate(missing, 8), " "),
 		})
+	} else if n := len(man.Brewfile.Packages) + len(man.Brewfile.Casknames); n > 0 {
+		checks = append(checks, verified("homebrew", "all %d recorded package(s) installed", n))
 	}
 	return checks
 }
@@ -187,18 +195,25 @@ func reauthCommand(file string) string {
 // checkSDKs verifies recorded language versions are installed.
 func checkSDKs(man *bundle.Manifest) []Check {
 	var checks []Check
+	var considered int
 	for manager, versions := range man.System.SDKs {
 		tool := strings.SplitN(manager, "/", 2)[0]
 		if _, err := exec.LookPath(tool); err != nil {
 			if tool == "go" || tool == "rust" {
 				continue // reported through Homebrew instead
 			}
+			considered++
 			checks = append(checks, Check{
 				Area: "runtimes", Status: Missing,
 				Detail: fmt.Sprintf("%s is not installed, so %d recorded version(s) are unavailable", tool, len(versions)),
 				Fix:    "install " + tool + ", then re-run the restore",
 			})
+			continue
 		}
+		considered++
+	}
+	if len(checks) == 0 && considered > 0 {
+		checks = append(checks, verified("runtimes", "all %d recorded runtime(s) present", considered))
 	}
 	sort.Slice(checks, func(i, j int) bool { return checks[i].Detail < checks[j].Detail })
 	return checks
@@ -215,6 +230,9 @@ func checkToolchains(man *bundle.Manifest) []Check {
 			})
 		}
 	}
+	if len(checks) == 0 && len(man.System.Toolchains) > 0 {
+		checks = append(checks, verified("toolchains", "all %d package manager(s) present", len(man.System.Toolchains)))
+	}
 	sort.Slice(checks, func(i, j int) bool { return checks[i].Detail < checks[j].Detail })
 	return checks
 }
@@ -223,11 +241,21 @@ func checkToolchains(man *bundle.Manifest) []Check {
 func checkExtensions(man *bundle.Manifest) []Check {
 	var checks []Check
 	for editor, want := range man.System.Extensions {
-		if _, err := exec.LookPath(editor); err != nil {
+		// Found the way restore finds it: these CLIs ship inside the
+		// application and are not on PATH unless someone put them there. Asking
+		// PATH alone meant doctor skipped the editor in silence and reported
+		// nothing about extensions that were never installed.
+		bin, found := restore.EditorCommand(editor)
+		if !found {
+			checks = append(checks, Check{
+				Area: "editor", Status: Action,
+				Detail: fmt.Sprintf("%s is not installed here, so its %d extension(s) are not either", editor, len(want)),
+				Fix:    "install it, or send them elsewhere: macstash restore <bundle> --apply --extensions-to <editor>",
+			})
 			continue
 		}
 		have := map[string]bool{}
-		if out, err := exec.Command(editor, "--list-extensions").Output(); err == nil {
+		if out, err := exec.Command(bin, "--list-extensions").Output(); err == nil {
 			for _, l := range strings.Split(string(out), "\n") {
 				if t := strings.TrimSpace(l); t != "" {
 					have[t] = true
@@ -246,7 +274,9 @@ func checkExtensions(man *bundle.Manifest) []Check {
 				Detail: fmt.Sprintf("%s is missing %d extension(s)", editor, len(missing)),
 				Fix:    editor + " --install-extension " + strings.Join(truncate(missing, 3), " --install-extension "),
 			})
+			continue
 		}
+		checks = append(checks, verified("editor", "%s has all %d recorded extension(s)", editor, len(want)))
 	}
 	return checks
 }
@@ -260,11 +290,13 @@ func checkExtensions(man *bundle.Manifest) []Check {
 // nine of the ten apps it told the user to go and find had a cask.
 func checkApps(man *bundle.Manifest) []Check {
 	var installable, manual []string
+	var considered int
 	tokens := map[string]string{}
 	for _, a := range man.Applications {
 		if a.Source == "homebrew" || a.Source == "system" {
 			continue
 		}
+		considered++
 		if appInstalled(a.Name) {
 			continue
 		}
@@ -300,6 +332,12 @@ func checkApps(man *bundle.Manifest) []Check {
 				len(manual), strings.Join(truncate(manual, 8), ", ")),
 			Fix: "download and install these yourself — macstash never fetches from URLs",
 		})
+	}
+	// Counted rather than inferred from the manifest: apps Homebrew or macOS
+	// owns are skipped above, and confirming apps that were never looked at
+	// would be the same false assurance as the count this replaced.
+	if len(checks) == 0 && considered > 0 {
+		checks = append(checks, verified("applications", "all %d hand-installed application(s) present", considered))
 	}
 	return checks
 }
@@ -347,7 +385,7 @@ func checkMCP(home string, man *bundle.Manifest) []Check {
 		}
 	}
 	if len(missing) == 0 {
-		return nil
+		return []Check{verified("mcp", "all %d recorded MCP server(s) configured", len(man.System.MCPServers))}
 	}
 	sort.Strings(missing)
 
@@ -374,15 +412,74 @@ func checkMCP(home string, man *bundle.Manifest) []Check {
 func checkPermissions(man *bundle.Manifest) []Check {
 	var checks []Check
 	for _, r := range man.Requirements {
+		name := r.DisplayName()
 		for _, p := range r.Permissions {
+			label := bundle.PermissionLabel(p)
+			pane := "System Settings › Privacy & Security › " + label
+
+			// Full Disk Access is the one permission that can be answered from
+			// here, and only for the terminal this process runs in: macOS grants
+			// privacy permissions to an application and a command-line tool
+			// inherits its host's, so the probe below describes that app and no
+			// other. Everything else is reported without a claim about whether
+			// it is granted, which is honest rather than useless: the list still
+			// says what to go and check.
+			if p != "full_disk_access" {
+				checks = append(checks, Check{
+					Area: "permissions", Status: Action,
+					Detail: fmt.Sprintf("%s needs %s — macstash cannot see whether it is granted", name, label),
+					Fix:    pane,
+				})
+				continue
+			}
+			if restore.HostTerminalEntry() != r.Entry {
+				checks = append(checks, Check{
+					Area: "permissions", Status: Action,
+					Detail: fmt.Sprintf("%s needs %s — run doctor inside %s to test it", name, label, name),
+					Fix:    pane,
+				})
+				continue
+			}
+			if fullDiskAccessGranted() {
+				checks = append(checks, Check{
+					Area: "permissions", Status: OK,
+					Detail: fmt.Sprintf("%s has %s", name, label),
+				})
+				continue
+			}
 			checks = append(checks, Check{
 				Area: "permissions", Status: Action,
-				Detail: fmt.Sprintf("%s needs %s", r.Name, p),
-				Fix:    "System Settings › Privacy & Security",
+				Detail: fmt.Sprintf("%s does not have %s", name, label),
+				Fix:    pane + ", then add " + name,
 			})
 		}
 	}
 	return checks
+}
+
+// fullDiskAccessGranted reports whether this process can read a TCC-protected
+// path.
+//
+// ~/Library/Application Support/com.apple.TCC/TCC.db is the probe: it exists on
+// every install, its Unix mode is world-readable, and the only thing standing
+// between a process and its contents is the privacy grant. Checked on a machine
+// without the permission, where the open fails despite mode 644, which is what
+// makes the result mean what it says.
+//
+// A read that fails for any other reason counts as not granted. This decides
+// whether to print a checklist item, so the cost of being wrong is one line
+// somebody can ignore.
+func fullDiskAccessGranted() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	f, err := os.Open(filepath.Join(home, "Library", "Application Support", "com.apple.TCC", "TCC.db"))
+	if err != nil {
+		return false
+	}
+	f.Close()
+	return true
 }
 
 // checkDeep actually runs things, rather than comparing lists.
@@ -424,6 +521,16 @@ func checkDeep(man *bundle.Manifest) []Check {
 	return checks
 }
 
+// verified records a check that looked and found nothing wrong.
+//
+// Without these the summary counts only problems, so a machine in perfect shape
+// reported "0 fine" and there was no way to tell a clean result from a check
+// that never ran. A count of what was actually confirmed is the number worth
+// printing.
+func verified(area, format string, args ...any) Check {
+	return Check{Area: area, Status: OK, Detail: fmt.Sprintf(format, args...)}
+}
+
 func truncate(s []string, n int) []string {
 	if len(s) <= n {
 		return s
@@ -432,15 +539,15 @@ func truncate(s []string, n int) []string {
 }
 
 // Summarise renders checks for a human, worst first.
-func Summarise(checks []Check) string {
+func Summarise(checks []Check, verbose bool) string {
 	var b strings.Builder
 	byStatus := map[Status][]Check{}
 	for _, c := range checks {
 		byStatus[c.Status] = append(byStatus[c.Status], c)
 	}
 
-	fmt.Fprintf(&b, "%d missing, %d needing you, %d fine\n\n",
-		len(byStatus[Missing]), len(byStatus[Action]), len(byStatus[OK]))
+	fmt.Fprintf(&b, "%d checked, %d missing, %d needing you\n\n",
+		len(checks), len(byStatus[Missing]), len(byStatus[Action]))
 
 	for _, status := range []Status{Missing, Action} {
 		group := byStatus[status]
@@ -459,6 +566,19 @@ func Summarise(checks []Check) string {
 			}
 		}
 		b.WriteString("\n")
+	}
+
+	// The confirmations are the answer to "did it actually look?", which the
+	// counts alone cannot settle. They are not worth a screen every time, so
+	// they print on request.
+	if verbose && len(byStatus[OK]) > 0 {
+		b.WriteString("Confirmed:\n")
+		for _, c := range byStatus[OK] {
+			fmt.Fprintf(&b, "  [%s] %s\n", c.Area, c.Detail)
+		}
+		b.WriteString("\n")
+	} else if n := len(byStatus[OK]); n > 0 {
+		fmt.Fprintf(&b, "%d check(s) confirmed fine. Pass --verbose to list them.\n\n", n)
 	}
 
 	if len(byStatus[Missing]) == 0 && len(byStatus[Action]) == 0 {

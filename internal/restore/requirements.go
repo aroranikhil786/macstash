@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -94,7 +95,7 @@ func PermissionChecklist(reqs []bundle.Requirement) string {
 	byPerm := map[string][]string{}
 	for _, r := range reqs {
 		for _, p := range r.Permissions {
-			byPerm[p] = append(byPerm[p], r.Name)
+			byPerm[p] = append(byPerm[p], r.DisplayName())
 		}
 	}
 	if len(byPerm) == 0 {
@@ -113,29 +114,9 @@ func PermissionChecklist(reqs []bundle.Requirement) string {
 	for _, p := range perms {
 		apps := byPerm[p]
 		sort.Strings(apps)
-		fmt.Fprintf(&b, "  %-22s %s\n", permissionLabel(p), strings.Join(apps, ", "))
+		fmt.Fprintf(&b, "  %-22s %s\n", bundle.PermissionLabel(p), strings.Join(apps, ", "))
 	}
 	return b.String()
-}
-
-// permissionLabel maps a catalog key to the name macOS actually shows.
-func permissionLabel(key string) string {
-	switch key {
-	case "full_disk_access":
-		return "Full Disk Access"
-	case "accessibility":
-		return "Accessibility"
-	case "input_monitoring":
-		return "Input Monitoring"
-	case "screen_recording":
-		return "Screen Recording"
-	case "developer_tools":
-		return "Developer Tools"
-	case "automation":
-		return "Automation"
-	default:
-		return key
-	}
 }
 
 // hostTerminals maps $TERM_PROGRAM to the catalog entry for that terminal.
@@ -183,4 +164,56 @@ func HostTerminalAdvice(r bundle.Requirement) string {
 	}
 	return "you are running inside " + name + " — quitting it would end this restore.\n" +
 		"        Open Terminal (in /Applications/Utilities) and run macstash from there"
+}
+
+// GitRewritesToSSH reports whether the restored git config rewrites remote URLs
+// to SSH.
+//
+// An insteadOf rule is correct configuration that depends on something a bundle
+// deliberately never carries. On a machine with no key yet it turns every fetch
+// into an authentication failure, and Homebrew goes down with it, because brew
+// clones its taps with the user's git config. Both facts were already in the
+// restore output, in separate sections, and connecting them is the difference
+// between a checklist and a morning spent debugging.
+func GitRewritesToSSH(home string) bool {
+	data, err := os.ReadFile(filepath.Join(home, ".gitconfig"))
+	if err != nil {
+		return false
+	}
+	// Only rules pointing at SSH matter. The reverse direction, rewriting SSH
+	// to HTTPS, needs no key and is often exactly how someone works around not
+	// having one.
+	for _, section := range strings.Split(string(data), "[url ")[1:] {
+		head, body, ok := strings.Cut(section, "]")
+		// Case-insensitive so pushInsteadOf counts too. It rewrites only pushes,
+		// which is a narrower break than insteadOf but needs the same key.
+		if !ok || !strings.Contains(strings.ToLower(body), "insteadof") {
+			continue
+		}
+		if strings.Contains(head, "git@") || strings.Contains(head, "ssh://") {
+			return true
+		}
+	}
+	return false
+}
+
+// HasSSHKey reports whether a private key exists in ~/.ssh.
+//
+// The public halves are ignored: one on its own authenticates nothing, which is
+// why macstash stopped carrying them.
+func HasSSHKey(home string) bool {
+	entries, err := os.ReadDir(filepath.Join(home, ".ssh"))
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || strings.HasSuffix(name, ".pub") {
+			continue
+		}
+		if strings.HasPrefix(name, "id_") {
+			return true
+		}
+	}
+	return false
 }

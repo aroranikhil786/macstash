@@ -5,6 +5,7 @@ import (
 	"github.com/aroranikhil786/macstash/internal/classify"
 	"github.com/aroranikhil786/macstash/internal/scanner"
 	"github.com/aroranikhil786/macstash/internal/scrub"
+	"strings"
 )
 
 // SchemaVersion is bumped whenever the manifest shape changes incompatibly.
@@ -94,6 +95,54 @@ type Requirement struct {
 	Permissions []string `json:"permissions,omitempty"`
 	// Category groups entries in `macstash catalog`.
 	Category string `json:"category,omitempty"`
+	// AppName is the application's name as macOS shows it, taken from the
+	// bundle on disk. It differs from Name often enough to matter: the catalog
+	// calls it iTerm2 and System Settings lists iTerm, and someone scanning the
+	// privacy list for the wrong word concludes it is not there.
+	AppName string `json:"app_name,omitempty"`
+}
+
+// DisplayName is what to call this application when telling someone to find it
+// in System Settings. Bundles written before AppName existed fall back to the
+// catalog's name.
+func (r Requirement) DisplayName() string {
+	switch {
+	case r.AppName != "":
+		return r.AppName
+	case r.Name != "":
+		return r.Name
+	}
+	return r.Entry
+}
+
+// permissionLabels maps the catalog's identifiers to the words System Settings
+// prints. Someone reading "full_disk_access" has to translate it before they can
+// find the pane, and that translation is not always obvious.
+var permissionLabels = map[string]string{
+	"accessibility":    "Accessibility",
+	"automation":       "Automation",
+	"camera":           "Camera",
+	"developer_tools":  "Developer Tools",
+	"full_disk_access": "Full Disk Access",
+	"input_monitoring": "Input Monitoring",
+	"microphone":       "Microphone",
+	"photos":           "Photos",
+	"screen_recording": "Screen Recording",
+}
+
+// PermissionLabel turns a permission identifier into the name macOS uses.
+func PermissionLabel(id string) string {
+	if s, ok := permissionLabels[id]; ok {
+		return s
+	}
+	// An identifier macstash has not seen still reads better as words.
+	words := strings.Split(strings.ReplaceAll(id, "_", " "), " ")
+	for i, w := range words {
+		if w != "" {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 // App is one application found on the machine.

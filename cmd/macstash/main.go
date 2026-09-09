@@ -32,7 +32,7 @@ import (
 // -ldflags "-X main.Version=...". It must stay a var: the Go linker silently
 // ignores -X on a const, so declaring it const would ship every release
 // labelled 0.1.0-dev, and record that wrong version in every bundle manifest.
-var Version = "0.2.10-dev"
+var Version = "0.2.10"
 
 const usage = `macstash — capture a macOS development environment and rebuild it elsewhere
 
@@ -1313,7 +1313,7 @@ func cmdRestore(f *flags) error {
 			fmt.Printf("  [%s] %s\n", n.Entry, strings.ReplaceAll(strings.TrimSpace(n.Text), "\n", "\n        "))
 		}
 	}
-	printNextSteps(p, f, selectedRepos)
+	printNextSteps(p, f, home, selectedRepos)
 	return nil
 }
 
@@ -1325,10 +1325,20 @@ func cmdRestore(f *flags) error {
 // works through it: the shell has to come before the tools that live on its
 // PATH, and the key before the clones that need it. Reconstructing that sequence
 // by reading back seven sections is work the tool can do once instead.
-func printNextSteps(p *restore.Plan, f *flags, repos []bundle.Repo) {
+func printNextSteps(p *restore.Plan, f *flags, home string, repos []bundle.Repo) {
 	sys := p.Manifest.System
 	var steps []string
 
+	// The key comes first when the git config cannot work without it. An
+	// insteadOf rule sends every GitHub fetch through SSH, and Homebrew clones
+	// its taps with that same config, so without a key both break the moment
+	// this restore ends. Restore knew each half of that and said neither.
+	keyFirst := restore.GitRewritesToSSH(home) && !restore.HasSSHKey(home)
+	if keyFirst {
+		steps = append(steps, "Generate an SSH key and add it to GitHub, before anything else.\n"+
+			"     Your git config rewrites GitHub URLs to SSH, so until a key exists\n"+
+			"     here, git and Homebrew will both fail. The command is printed above.")
+	}
 	if shellConfigWritten(p) {
 		steps = append(steps, "Open a new shell so the restored config takes effect:  exec zsh -l")
 	}
@@ -1351,7 +1361,7 @@ func printNextSteps(p *restore.Plan, f *flags, repos []bundle.Repo) {
 	if restore.PermissionChecklist(p.Manifest.Requirements) != "" {
 		steps = append(steps, "Grant the permissions listed above in System Settings")
 	}
-	if len(sys.SSHKeys) > 0 {
+	if len(sys.SSHKeys) > 0 && !keyFirst {
 		steps = append(steps, "Generate the SSH key above and add it wherever the old one was trusted")
 	}
 	if !f.cloneRepos && len(repos) > 0 {
@@ -1524,7 +1534,7 @@ func cmdDoctor(f *flags) error {
 
 	fmt.Printf("Checking this machine against the capture from %s\n\n", man.CreatedAt)
 	checks := doctor.Run(home, man, f.deep)
-	fmt.Print(doctor.Summarise(checks))
+	fmt.Print(doctor.Summarise(checks, f.verbose))
 
 	if !f.deep {
 		fmt.Println("Run `macstash doctor --deep` to actually exercise the toolchain rather")

@@ -465,6 +465,13 @@ var editorApps = map[string]string{
 // "code-insiders", and names differ across the forks. Tunnel helpers live there
 // too and are skipped.
 func editorCommand(name string) (string, bool) {
+	return EditorCommand(name)
+}
+
+// EditorCommand is editorCommand for callers outside this package: doctor has
+// to find these binaries the same way, and asking PATH alone made it skip
+// editors in silence.
+func EditorCommand(name string) (string, bool) {
 	if path, err := exec.LookPath(name); err == nil {
 		return path, true
 	}

@@ -27,6 +27,18 @@ func writeFile(t *testing.T, dir, rel, content string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// problems drops the confirmations, so a test about what went wrong is not
+// rewritten every time doctor learns to say what went right.
+func problems(checks []Check) []Check {
+	var out []Check
+	for _, c := range checks {
+		if c.Status != OK {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func only(t *testing.T, checks []Check, area string) []Check {
 	t.Helper()
 	var out []Check
@@ -72,8 +84,8 @@ func TestCheckFilesSaysNothingWhenTheFileMatches(t *testing.T) {
 		{Entry: "zsh", Rel: ".zshrc", SHA256: sum},
 	}}
 
-	if checks := checkFiles(home, man); len(checks) != 0 {
-		t.Fatalf("an unmodified file should produce no checks, got %+v", checks)
+	if p := problems(checkFiles(home, man)); len(p) != 0 {
+		t.Fatalf("an unmodified file is not a problem, got %+v", p)
 	}
 }
 
@@ -89,14 +101,17 @@ func TestCheckFilesReportsAnEditedFileAsOKNotMissing(t *testing.T) {
 
 	checks := checkFiles(home, man)
 
-	if len(checks) != 1 {
-		t.Fatalf("want 1 check, got %d", len(checks))
+	if p := problems(checks); len(p) != 0 {
+		t.Fatalf("a user edit must not be reported as a problem, got %+v", p)
 	}
-	if checks[0].Status != OK {
-		t.Errorf("a user edit must not be reported as a problem, got status %q", checks[0].Status)
+	var edited bool
+	for _, c := range checks {
+		if strings.Contains(c.Detail, "edited") {
+			edited = true
+		}
 	}
-	if !strings.Contains(checks[0].Detail, "edited") {
-		t.Errorf("detail should explain the divergence, got %q", checks[0].Detail)
+	if !edited {
+		t.Errorf("the divergence should still be reported, got %+v", checks)
 	}
 }
 
@@ -108,8 +123,8 @@ func TestCheckFilesSkipsComparisonWhenNoHashWasRecorded(t *testing.T) {
 		{Entry: "tmux", Rel: ".tmux.conf"},
 	}}
 
-	if checks := checkFiles(home, man); len(checks) != 0 {
-		t.Fatalf("present file with no hash should pass quietly, got %+v", checks)
+	if p := problems(checkFiles(home, man)); len(p) != 0 {
+		t.Fatalf("a present file with no hash is not a problem, got %+v", p)
 	}
 }
 
@@ -187,8 +202,10 @@ func TestCheckAppsIgnoresHomebrewAndSystemApps(t *testing.T) {
 		{Name: "macstash-test-system-app", Source: "system"},
 	}}
 
+	// Not merely absent from the problem list: these were never examined, so
+	// doctor must not confirm them either.
 	if checks := checkApps(man); len(checks) != 0 {
-		t.Fatalf("homebrew and system apps are not action items, got %+v", checks)
+		t.Fatalf("homebrew and system apps are neither checked nor reported, got %+v", checks)
 	}
 }
 
@@ -263,8 +280,8 @@ func TestCheckSDKsDefersGoAndRustToHomebrew(t *testing.T) {
 		"rust": {"1.80"},
 	}}}
 
-	if checks := checkSDKs(man); len(checks) != 0 {
-		t.Fatalf("go and rust are reported via homebrew, got %+v", checks)
+	if p := problems(checkSDKs(man)); len(p) != 0 {
+		t.Fatalf("go and rust are reported via homebrew, got %+v", p)
 	}
 }
 
@@ -328,9 +345,9 @@ func TestSummariseCountsEachStatus(t *testing.T) {
 		{Area: "files", Status: Missing, Detail: "two"},
 		{Area: "credentials", Status: Action, Detail: "three"},
 		{Area: "files", Status: OK, Detail: "four"},
-	})
+	}, false)
 
-	if !strings.Contains(out, "2 missing, 1 needing you, 1 fine") {
+	if !strings.Contains(out, "4 checked, 2 missing, 1 needing you") {
 		t.Errorf("summary line wrong, got:\n%s", out)
 	}
 	if !strings.Contains(out, "one") || !strings.Contains(out, "three") {
@@ -345,7 +362,7 @@ func TestSummariseCountsEachStatus(t *testing.T) {
 func TestSummariseIncludesTheFixWhenThereIsOne(t *testing.T) {
 	out := Summarise([]Check{
 		{Area: "homebrew", Status: Missing, Detail: "ripgrep not installed", Fix: "brew install ripgrep"},
-	})
+	}, false)
 
 	if !strings.Contains(out, "brew install ripgrep") {
 		t.Errorf("the fix should be printed, got:\n%s", out)
@@ -356,7 +373,7 @@ func TestSummariseIncludesTheFixWhenThereIsOne(t *testing.T) {
 // what was captured, and saying otherwise is exactly the false assurance the
 // whole tool is built to avoid.
 func TestSummariseRefusesToClaimTheMachineIsComplete(t *testing.T) {
-	out := Summarise(nil)
+	out := Summarise(nil, false)
 
 	if !strings.Contains(out, "Nothing outstanding") {
 		t.Fatalf("want the empty-state message, got:\n%s", out)
@@ -370,7 +387,7 @@ func TestSummariseOrdersMissingBeforeAction(t *testing.T) {
 	out := Summarise([]Check{
 		{Area: "credentials", Status: Action, Detail: "re-auth npm"},
 		{Area: "files", Status: Missing, Detail: "zshrc absent"},
-	})
+	}, false)
 
 	iMissing := strings.Index(out, "zshrc absent")
 	iAction := strings.Index(out, "re-auth npm")
@@ -459,13 +476,79 @@ func TestCheckMCPIgnoresServersAlreadyConfigured(t *testing.T) {
 		{Name: "context7", Source: "~/.cursor/mcp.json"},
 	}}}
 
-	if checks := checkMCP(home, man); len(checks) != 0 {
-		t.Fatalf("an already-configured server is not outstanding: %+v", checks)
+	if p := problems(checkMCP(home, man)); len(p) != 0 {
+		t.Fatalf("an already-configured server is not outstanding: %+v", p)
 	}
 }
 
 func TestCheckMCPIsSilentWhenNoneWereRecorded(t *testing.T) {
 	if checks := checkMCP(t.TempDir(), &bundle.Manifest{}); len(checks) != 0 {
 		t.Fatalf("want nothing, got %+v", checks)
+	}
+}
+
+// The summary used to count only OK checks as "fine", and almost nothing
+// produced one, so a healthy machine reported zero and looked unexamined.
+func TestSummaryCountsWhatWasChecked(t *testing.T) {
+	out := Summarise([]Check{
+		{Area: "files", Status: OK, Detail: "12 restored file(s) still in place"},
+		{Area: "homebrew", Status: OK, Detail: "all 14 recorded package(s) installed"},
+	}, false)
+
+	if !strings.Contains(out, "2 checked, 0 missing, 0 needing you") {
+		t.Errorf("want the checked count, got:\n%s", out)
+	}
+	// The detail stays behind --verbose, but its existence must be visible.
+	if !strings.Contains(out, "2 check(s) confirmed fine") {
+		t.Errorf("want the confirmation count, got:\n%s", out)
+	}
+	if strings.Contains(out, "restored file(s) still in place") {
+		t.Errorf("confirmations should not be listed without --verbose, got:\n%s", out)
+	}
+}
+
+func TestVerboseListsTheConfirmations(t *testing.T) {
+	out := Summarise([]Check{
+		{Area: "files", Status: OK, Detail: "12 restored file(s) still in place"},
+	}, true)
+
+	if !strings.Contains(out, "12 restored file(s) still in place") {
+		t.Errorf("--verbose must list what was confirmed, got:\n%s", out)
+	}
+}
+
+// The permission line named the catalog's word for the app and the raw
+// identifier for the permission. System Settings uses neither, so the person
+// hunting through the privacy list did not find it.
+func TestPermissionsAreNamedTheWayMacOSNamesThem(t *testing.T) {
+	checks := checkPermissions(&bundle.Manifest{Requirements: []bundle.Requirement{
+		{Entry: "iterm2", Name: "iTerm2", AppName: "iTerm", Permissions: []string{"full_disk_access"}},
+	}})
+
+	if len(checks) != 1 {
+		t.Fatalf("checks = %+v, want one", checks)
+	}
+	if strings.Contains(checks[0].Detail, "full_disk_access") {
+		t.Errorf("the raw identifier leaked into the output: %q", checks[0].Detail)
+	}
+	if !strings.Contains(checks[0].Detail, "Full Disk Access") {
+		t.Errorf("want the System Settings wording, got %q", checks[0].Detail)
+	}
+	if !strings.Contains(checks[0].Detail, "iTerm ") && !strings.HasSuffix(checks[0].Detail, "iTerm") {
+		t.Errorf("want the application named as macOS names it, got %q", checks[0].Detail)
+	}
+}
+
+// A permission macstash cannot test must not be reported as though it had been.
+func TestAnUntestablePermissionSaysSo(t *testing.T) {
+	checks := checkPermissions(&bundle.Manifest{Requirements: []bundle.Requirement{
+		{Entry: "rectangle", AppName: "Rectangle", Permissions: []string{"accessibility"}},
+	}})
+
+	if len(checks) != 1 || checks[0].Status != Action {
+		t.Fatalf("checks = %+v, want one action", checks)
+	}
+	if !strings.Contains(checks[0].Detail, "cannot see whether it is granted") {
+		t.Errorf("want the limit stated, got %q", checks[0].Detail)
 	}
 }

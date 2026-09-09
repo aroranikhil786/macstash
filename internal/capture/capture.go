@@ -117,6 +117,7 @@ func Scan(home string, entries []catalog.Entry) (*Plan, error) {
 				QuitFirst:   e.Restore.QuitFirst,
 				Permissions: e.Restore.Permissions,
 				Category:    e.Category,
+				AppName:     appDisplayName(e.Detect.App),
 			})
 		}
 	}
@@ -559,4 +560,14 @@ func vendoredReason(dir string) string {
 		return reason
 	}
 	return "third-party git clone — git clone " + remote
+}
+
+// appDisplayName turns a detect path into the name macOS shows for the
+// application, which is the bundle name without its extension. The catalog's
+// own name is a label for the entry and is not always the same word.
+func appDisplayName(app string) string {
+	if app == "" {
+		return ""
+	}
+	return strings.TrimSuffix(filepath.Base(app), ".app")
 }
