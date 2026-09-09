@@ -175,3 +175,95 @@ func TestCheckEditorTarget(t *testing.T) {
 		t.Error("an editor that is not installed must be rejected")
 	}
 }
+
+// Settings written to the VS Code stable directory on a machine running only
+// Insiders restore the file and configure nothing: that editor never reads that
+// path. The flag that moves the extensions has to move these too.
+func TestEditorSettingsFollowTheExtensions(t *testing.T) {
+	staging := t.TempDir()
+	home := t.TempDir()
+	rel := "Library/Application Support/Code/User/settings.json"
+	src := filepath.Join(staging, "home", filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(src), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte(`{"editor.fontSize":14}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &Plan{
+		Staging: staging,
+		Actions: []Action{
+			{Rel: rel, Kind: Create},
+			{Rel: ".zshrc", Kind: Overwrite},
+		},
+	}
+
+	moved := p.RedirectEditorFiles(home, "code-insiders")
+
+	want := "Library/Application Support/Code - Insiders/User/settings.json"
+	if len(moved) != 1 || moved[0] != want {
+		t.Fatalf("moved = %v, want just %q", moved, want)
+	}
+	if got := p.Actions[0].Target(); got != want {
+		t.Errorf("target = %q, want %q", got, want)
+	}
+	// The staging copy is still found at the original path, which is why Dest
+	// cannot simply overwrite Rel.
+	if p.Actions[0].Rel != rel {
+		t.Errorf("Rel = %q, want it left alone at %q", p.Actions[0].Rel, rel)
+	}
+	// A shell config is nobody's editor directory.
+	if p.Actions[1].Dest != "" {
+		t.Errorf(".zshrc was moved to %q", p.Actions[1].Dest)
+	}
+}
+
+// Redirecting onto a file that is already there has to be classified again, or
+// the plan reports "create" over something it is about to overwrite.
+func TestRedirectReclassifiesAgainstTheNewLocation(t *testing.T) {
+	staging := t.TempDir()
+	home := t.TempDir()
+	rel := "Library/Application Support/Code/User/settings.json"
+	src := filepath.Join(staging, "home", filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(src), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte("incoming"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(home, "Library/Application Support/Cursor/User/settings.json")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dest, []byte("already here"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &Plan{Staging: staging, Actions: []Action{{Rel: rel, Kind: Create}}}
+	p.RedirectEditorFiles(home, "cursor")
+
+	if p.Actions[0].Kind != Overwrite {
+		t.Errorf("kind = %q, want overwrite: something is already at the destination", p.Actions[0].Kind)
+	}
+}
+
+func TestMissingToolsNamesTheCommand(t *testing.T) {
+	got := MissingTools(map[string][]string{"macstash-no-such-tool": {"1.0"}, "go/versions": {"go1.24.4"}})
+
+	var hasGo bool
+	for _, c := range got {
+		if c == "brew install go" {
+			hasGo = true
+		}
+	}
+	// Skipped rather than asserted when Go is installed on the test machine.
+	if !hasGo && !commandAvailable("go") {
+		t.Errorf("commands = %v, want the brew line for go", got)
+	}
+	for _, c := range got {
+		if strings.Contains(c, "brew install macstash-no-such-tool") {
+			t.Error("a tool with no known formula must not get a made-up brew command")
+		}
+	}
+}

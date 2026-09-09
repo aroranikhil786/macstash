@@ -122,7 +122,11 @@ func (p *Plan) RestoreSDKs(out io.Writer, apply bool) {
 
 		fmt.Fprintf(out, "  %-16s %s\n", m, strings.Join(truncate(versions, 4), ", "))
 		if !available {
-			fmt.Fprintf(out, "  %-16s (%s is not installed here — install it, then re-run)\n", "", tool)
+			if cmd, ok := toolInstall[tool]; ok {
+				fmt.Fprintf(out, "  %-16s (not installed here — %s, then re-run)\n", "", cmd)
+			} else {
+				fmt.Fprintf(out, "  %-16s (%s is not installed here — install it, then re-run)\n", "", tool)
+			}
 			continue
 		}
 		if !apply {
@@ -510,4 +514,125 @@ func LoadLiveManifest(home string) (*bundle.Manifest, error) {
 		return nil, err
 	}
 	return &m, nil
+}
+
+// editorSupportDirs maps an editor's command to the directory it keeps user
+// configuration in, under ~/Library/Application Support.
+var editorSupportDirs = map[string]string{
+	"code":          "Code",
+	"code-insiders": "Code - Insiders",
+	"cursor":        "Cursor",
+	"windsurf":      "Windsurf",
+}
+
+const supportBase = "Library/Application Support/"
+
+// RedirectEditorFiles sends editor configuration to the editor named by
+// --extensions-to, so settings arrive where the extensions went.
+//
+// Writing settings.json into the VS Code stable directory on a machine running
+// only Insiders restores the file and configures nothing: that editor never
+// reads that path. The settings and the extensions describe one editor, so one
+// flag moves both rather than leaving half the configuration behind.
+//
+// Only paths under Application Support move. An editor's dotfiles are its own
+// layout rather than a shared one, and guessing at those would be a different
+// claim from the one this flag makes.
+func (p *Plan) RedirectEditorFiles(home, target string) []string {
+	dir, ok := editorSupportDirs[target]
+	if !ok {
+		return nil
+	}
+	var moved []string
+	for i, a := range p.Actions {
+		from, ok := editorSupportDir(a.Rel)
+		if !ok || from == dir {
+			continue
+		}
+		dest := supportBase + dir + strings.TrimPrefix(a.Rel, supportBase+from)
+		content, err := os.ReadFile(filepath.Join(p.Staging, "home", filepath.FromSlash(a.Rel)))
+		if err != nil {
+			continue
+		}
+		kind, reason := classifyWrite(home, dest, content)
+		p.Actions[i].Dest = dest
+		p.Actions[i].Kind = kind
+		p.Actions[i].Reason = reason
+		moved = append(moved, dest)
+	}
+	sort.Strings(moved)
+	return moved
+}
+
+// editorSupportDir reports which editor's support directory a captured path
+// belongs to, if any.
+func editorSupportDir(rel string) (string, bool) {
+	if !strings.HasPrefix(rel, supportBase) {
+		return "", false
+	}
+	name, _, ok := strings.Cut(strings.TrimPrefix(rel, supportBase), "/")
+	if !ok {
+		return "", false
+	}
+	for _, dir := range editorSupportDirs {
+		if name == dir {
+			return dir, true
+		}
+	}
+	return "", false
+}
+
+// toolInstall names the command that puts a runtime or version manager back.
+//
+// Written out rather than derived, because "brew install <tool>" is wrong often
+// enough to matter: sdkman has no formula at all, and a printed command that
+// does not exist is worse than no command. A tool missing from this map falls
+// back to naming itself.
+var toolInstall = map[string]string{
+	"asdf":   "brew install asdf",
+	"fnm":    "brew install fnm",
+	"go":     "brew install go",
+	"jenv":   "brew install jenv",
+	"mise":   "brew install mise",
+	"node":   "brew install node",
+	"nodenv": "brew install nodenv",
+	"nvm":    "brew install nvm",
+	"pyenv":  "brew install pyenv",
+	"python": "brew install python",
+	"rbenv":  "brew install rbenv",
+	"rustup": "brew install rustup",
+	"sdkman": "curl -s https://get.sdkman.io | bash",
+	"uv":     "brew install uv",
+}
+
+// MissingTools names the recorded runtimes that are not on this machine, each
+// as the command that installs it.
+func MissingTools(sdks map[string][]string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for m := range sdks {
+		tool := strings.SplitN(m, "/", 2)[0]
+		if seen[tool] || commandAvailable(tool) {
+			continue
+		}
+		seen[tool] = true
+		if cmd, ok := toolInstall[tool]; ok {
+			out = append(out, cmd)
+		} else {
+			out = append(out, "install "+tool)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// PendingExtensions counts the extensions with no editor here to install them.
+func PendingExtensions(ext map[string][]string) int {
+	var n int
+	for editor, ids := range ext {
+		if _, ok := editorCommand(editor); !ok {
+			n += len(ids)
+		}
+	}
+	return n
 }

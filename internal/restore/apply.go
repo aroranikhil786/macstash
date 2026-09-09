@@ -40,6 +40,18 @@ type Action struct {
 	// script arrives without its execute bit and fails the first time it runs.
 	Mode   uint32
 	Reason string
+	// Dest is where the file is written when that differs from Rel. Only the
+	// editor redirect sets it: the staging copy is always found at Rel, so the
+	// two cannot be collapsed into one field.
+	Dest string
+}
+
+// Target is where this action writes, which is Rel unless something moved it.
+func (a Action) Target() string {
+	if a.Dest != "" {
+		return a.Dest
+	}
+	return a.Rel
 }
 
 // Plan is a fully-resolved restore, computed before anything is written.
@@ -127,35 +139,40 @@ func Prepare(archive, home string) (*Plan, func(), error) {
 			continue
 		}
 
-		kind := Create
-		if live, err := os.ReadFile(filepath.Join(home, filepath.FromSlash(item.Rel))); err == nil {
-			switch {
-			case bytes.Equal(live, content):
-				kind = Unchanged
-			case len(content) == 0 && len(live) > 0:
-				// An empty file has nothing to restore, so writing it over a file
-				// that has content can only destroy. This is not hypothetical: a
-				// migration replaced a .zprofile holding the Homebrew shellenv
-				// line with the empty one from the old machine, and brew left the
-				// PATH of every new login shell. The backup held it, but the plan
-				// said "overwrite" and gave no hint that the incoming side was
-				// blank.
-				//
-				// Creating an empty file is still allowed. A zero-byte file whose
-				// existence is the whole point — .hushlogin is the usual one — has
-				// no live content to lose.
-				p.Actions = append(p.Actions, Action{
-					Rel: item.Rel, Kind: Refused, Class: item.Class, Mode: item.Mode,
-					Reason: "empty in the bundle but not here; keeping what this machine has",
-				})
-				continue
-			default:
-				kind = Overwrite
-			}
-		}
-		p.Actions = append(p.Actions, Action{Rel: item.Rel, Kind: kind, Class: item.Class, Mode: item.Mode})
+		kind, reason := classifyWrite(home, item.Rel, content)
+		p.Actions = append(p.Actions, Action{
+			Rel: item.Rel, Kind: kind, Class: item.Class, Mode: item.Mode, Reason: reason,
+		})
 	}
 	return p, cleanup, nil
+}
+
+// classifyWrite decides what writing content to rel would do to this machine.
+// Shared with the editor redirect, which has to ask the same question again
+// once it has moved a file somewhere else.
+func classifyWrite(home, rel string, content []byte) (ActionKind, string) {
+	live, err := os.ReadFile(filepath.Join(home, filepath.FromSlash(rel)))
+	if err != nil {
+		return Create, ""
+	}
+	switch {
+	case bytes.Equal(live, content):
+		return Unchanged, ""
+	case len(content) == 0 && len(live) > 0:
+		// An empty file has nothing to restore, so writing it over a file
+		// that has content can only destroy. This is not hypothetical: a
+		// migration replaced a .zprofile holding the Homebrew shellenv
+		// line with the empty one from the old machine, and brew left the
+		// PATH of every new login shell. The backup held it, but the plan
+		// said "overwrite" and gave no hint that the incoming side was
+		// blank.
+		//
+		// Creating an empty file is still allowed. A zero-byte file whose
+		// existence is the whole point — .hushlogin is the usual one — has
+		// no live content to lose.
+		return Refused, "empty in the bundle but not here; keeping what this machine has"
+	}
+	return Overwrite, ""
 }
 
 // Filter narrows a plan to the given catalog entry ids. only and skip are the
@@ -211,14 +228,14 @@ func (p *Plan) Apply(home, stamp string, out io.Writer) error {
 			continue
 		}
 
-		target := filepath.Join(home, filepath.FromSlash(a.Rel))
+		target := filepath.Join(home, filepath.FromSlash(a.Target()))
 		if a.Kind == Overwrite {
-			dst, err := backupFile(home, stamp, a.Rel)
+			dst, err := backupFile(home, stamp, a.Target())
 			if err != nil {
-				return fmt.Errorf("backing up %s: %w", a.Rel, err)
+				return fmt.Errorf("backing up %s: %w", a.Target(), err)
 			}
 			backed++
-			fmt.Fprintf(out, "  backed up %s -> %s\n", a.Rel, shortenHome(home, dst))
+			fmt.Fprintf(out, "  backed up %s -> %s\n", a.Target(), shortenHome(home, dst))
 		}
 
 		src := filepath.Join(p.Staging, "home", filepath.FromSlash(a.Rel))

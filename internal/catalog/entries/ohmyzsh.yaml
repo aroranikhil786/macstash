@@ -20,8 +20,12 @@ capture:
         - example.plugin.zsh
 restore:
   note: |
-    Oh My Zsh itself is not captured — reinstall it from ohmyz.sh first, then
-    these custom themes and plugins drop back into ~/.oh-my-zsh/custom.
+    Oh My Zsh itself is not captured. Reinstall it first, with the flag:
+
+      sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --keep-zshrc
+
+    Without --keep-zshrc the installer replaces the .zshrc this restore just
+    put back. Then these custom themes and plugins drop into ~/.oh-my-zsh/custom.
     Anything under custom/ that is a git clone — powerlevel10k, most plugins —
     is skipped rather than copied, and the capture report names it along with
     the command to clone it back. A detached copy of a theme is worse than a

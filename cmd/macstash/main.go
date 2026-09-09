@@ -708,6 +708,14 @@ func printSSHKeys(s bundle.System, verbose bool) {
 		}
 	}
 
+	// With no keys there is nothing to explain about carrying them, but the host
+	// list below is still worth printing: it comes from the SSH config and
+	// known_hosts, which exist whether or not a key file did.
+	if len(s.SSHKeys) == 0 {
+		printSSHHosts(s, verbose)
+		return
+	}
+
 	fmt.Printf("\nSSH keys: %d found on the old machine. Neither the private key nor the\n"+
 		"          public key is carried — a public key cannot authenticate without\n"+
 		"          its private half, and copying it would only make ~/.ssh look as\n"+
@@ -737,6 +745,13 @@ func printSSHKeys(s bundle.System, verbose bool) {
 			"    %-8s %s\n", k.Name, k.Type, k.Fingerprint)
 	}
 
+	printSSHHosts(s, verbose)
+}
+
+// printSSHHosts lists the servers that trusted the old key. It is reached with
+// or without a key file: the SSH config and known_hosts describe where someone
+// works regardless of whether the key itself lived on disk.
+func printSSHHosts(s bundle.System, verbose bool) {
 	if len(s.SSHHosts) == 0 {
 		return
 	}
@@ -1112,6 +1127,18 @@ func cmdRestore(f *flags) error {
 
 	p.Filter(f.only, f.skip)
 
+	// The editor redirect runs before the plan is printed, so the paths shown
+	// are the ones that will actually be written.
+	if f.extensionsTo != "" {
+		if moved := p.RedirectEditorFiles(home, f.extensionsTo); len(moved) > 0 {
+			fmt.Printf("Editor configuration redirected to %s:\n", f.extensionsTo)
+			for _, m := range moved {
+				fmt.Printf("  %s\n", m)
+			}
+			fmt.Println()
+		}
+	}
+
 	// Selection runs after --only/--skip so the file reflects what is actually
 	// on the table, and before the plan is printed so the counts are honest.
 	selectedApps, selectedRepos := p.Manifest.Applications, p.Manifest.Repos
@@ -1158,7 +1185,7 @@ func cmdRestore(f *flags) error {
 				fmt.Printf("  unchanged %s\n", a.Rel)
 			}
 		default:
-			fmt.Printf("  %-9s %s\n", string(a.Kind), a.Rel)
+			fmt.Printf("  %-9s %s\n", string(a.Kind), a.Target())
 		}
 	}
 
@@ -1286,7 +1313,82 @@ func cmdRestore(f *flags) error {
 			fmt.Printf("  [%s] %s\n", n.Entry, strings.ReplaceAll(strings.TrimSpace(n.Text), "\n", "\n        "))
 		}
 	}
+	printNextSteps(p, f, selectedRepos)
 	return nil
+}
+
+// printNextSteps closes a restore with what is left to do, in the order to do
+// it.
+//
+// Every item here was already reported above. The problem is that the report is
+// ordered by the order macstash did its work, which is not the order a person
+// works through it: the shell has to come before the tools that live on its
+// PATH, and the key before the clones that need it. Reconstructing that sequence
+// by reading back seven sections is work the tool can do once instead.
+func printNextSteps(p *restore.Plan, f *flags, repos []bundle.Repo) {
+	sys := p.Manifest.System
+	var steps []string
+
+	if shellConfigWritten(p) {
+		steps = append(steps, "Open a new shell so the restored config takes effect:  exec zsh -l")
+	}
+	for _, cmd := range restore.MissingTools(sys.SDKs) {
+		steps = append(steps, "Put back a runtime the old machine had:  "+cmd)
+	}
+	if n := restore.PendingExtensions(sys.Extensions); n > 0 {
+		if here := restore.InstalledEditors(); len(here) > 0 {
+			steps = append(steps, fmt.Sprintf(
+				"Install the %d waiting editor extension(s):  re-run with --extensions-to %s",
+				n, here[0]))
+		} else {
+			steps = append(steps, fmt.Sprintf(
+				"Install an editor, then re-run for its %d extension(s)", n))
+		}
+	}
+	if len(p.Manifest.Scrubs) > 0 {
+		steps = append(steps, "Re-authenticate the tools listed above — no credentials were captured")
+	}
+	if restore.PermissionChecklist(p.Manifest.Requirements) != "" {
+		steps = append(steps, "Grant the permissions listed above in System Settings")
+	}
+	if len(sys.SSHKeys) > 0 {
+		steps = append(steps, "Generate the SSH key above and add it wherever the old one was trusted")
+	}
+	if !f.cloneRepos && len(repos) > 0 {
+		steps = append(steps, fmt.Sprintf("Clone your %d repository(ies):  macstash clone %s",
+			len(repos), f.args[0]))
+	}
+	if len(sys.Prefs) > 0 {
+		steps = append(steps, "Log out and back in, so the imported preferences take hold")
+	}
+
+	if len(steps) == 0 {
+		fmt.Println("\nNothing left to do — this machine matches the bundle.")
+		return
+	}
+	fmt.Printf("\nWhat is left, in order:\n")
+	for i, s := range steps {
+		fmt.Printf("  %d. %s\n", i+1, s)
+	}
+}
+
+// shellConfigWritten reports whether the restore touched a file the login shell
+// reads, which is what makes "open a new shell" the first step rather than a
+// footnote.
+func shellConfigWritten(p *restore.Plan) bool {
+	shellFiles := map[string]bool{
+		".zshrc": true, ".zprofile": true, ".zshenv": true,
+		".bashrc": true, ".bash_profile": true, ".profile": true,
+	}
+	for _, a := range p.Actions {
+		if a.Kind != restore.Create && a.Kind != restore.Overwrite {
+			continue
+		}
+		if shellFiles[a.Target()] {
+			return true
+		}
+	}
+	return false
 }
 
 // checkCloudSync refuses to drop a bundle into a folder that syncs to somebody
