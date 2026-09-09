@@ -1,10 +1,12 @@
 package capture
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/aroranikhil786/macstash/internal/bundle"
+	"github.com/aroranikhil786/macstash/internal/catalog"
 	"github.com/aroranikhil786/macstash/internal/selection"
 )
 
@@ -325,4 +327,47 @@ func containsString(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// The Oh My Zsh skip list is only useful if it matches the files it names.
+// "example.zsh" matched neither stub the framework ships, so both travelled in
+// every bundle.
+func TestOhMyZshExampleStubsAreSkipped(t *testing.T) {
+	skip := []string{"*/.git", "example.zsh-theme", "example.plugin.zsh"}
+	for _, rel := range []string{
+		"themes/example.zsh-theme",
+		"plugins/example/example.plugin.zsh",
+	} {
+		if !matchesAny(rel, skip) {
+			t.Errorf("%q should be skipped", rel)
+		}
+	}
+	if matchesAny("themes/powerlevel10k/powerlevel10k.zsh-theme", skip) {
+		t.Error("a real theme must not be skipped by the example patterns")
+	}
+}
+
+// The patterns in the catalog must be the ones the test above proves work.
+func TestOhMyZshCatalogUsesThePatternsThatMatch(t *testing.T) {
+	entries, err := catalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.ID != "ohmyzsh" {
+			continue
+		}
+		for _, p := range e.Capture.Paths {
+			if !strings.Contains(p.Path, "custom") {
+				continue
+			}
+			for _, want := range []string{"example.zsh-theme", "example.plugin.zsh"} {
+				if !slices.Contains(p.Skip, want) {
+					t.Errorf("catalog skip list %v is missing %q", p.Skip, want)
+				}
+			}
+		}
+		return
+	}
+	t.Fatal("no ohmyzsh entry in the catalog")
 }

@@ -12,7 +12,12 @@ capture:
       class: public
       skip:
         - "*/.git"
-        - example.zsh
+        # Oh My Zsh ships these two stubs inside custom/. The pattern used to be
+        # "example.zsh", which matches neither of their real names, so both were
+        # carried in every bundle and written back over the identical copies a
+        # fresh install had just put there.
+        - example.zsh-theme
+        - example.plugin.zsh
 restore:
   note: |
     Oh My Zsh itself is not captured — reinstall it from ohmyz.sh first, then
