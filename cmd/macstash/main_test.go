@@ -592,3 +592,70 @@ func TestParentDomain(t *testing.T) {
 		}
 	}
 }
+
+// A regenerated key needs a label that tells it apart from the one being
+// revoked. Carrying over "user@oldlaptop" puts two identically named keys on
+// the same key list, which defeats the fingerprints printed beside it.
+func TestKeyCommentDoesNotReuseTheOldMachineName(t *testing.T) {
+	got := keyComment([]bundle.SSHKey{{Name: "id_rsa.pub", Comment: "nikhil.arora@nikhilarora1M-BNG1"}})
+
+	if got == "nikhil.arora@nikhilarora1M-BNG1" {
+		t.Fatal("the old machine's name was copied onto the new key")
+	}
+	if want := localIdentity(); want != "" && got != want {
+		t.Errorf("comment = %q, want this machine's %q", got, want)
+	}
+}
+
+// An email names a person, not a laptop, and stays correct after the move.
+func TestKeyCommentKeepsAnEmail(t *testing.T) {
+	keys := []bundle.SSHKey{
+		{Name: "id_rsa.pub", Comment: "nikhil.arora@officemac1"},
+		{Name: "id_ed25519.pub", Comment: "nikhil@example.com"},
+	}
+	if got := keyComment(keys); got != "nikhil@example.com" {
+		t.Errorf("comment = %q, want the email", got)
+	}
+}
+
+func TestKeyCommentWithNothingToGoOn(t *testing.T) {
+	got := keyComment(nil)
+	if got == "" {
+		t.Fatal("a comment is always needed: it goes straight into a command")
+	}
+	if want := localIdentity(); want != "" && got != want {
+		t.Errorf("comment = %q, want %q", got, want)
+	}
+}
+
+func TestNamesAPerson(t *testing.T) {
+	for _, ok := range []string{"nikhil@example.com", "n@a.co", "first.last@sub.example.org"} {
+		if !namesAPerson(ok) {
+			t.Errorf("namesAPerson(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"", "nikhil.arora@nikhilarora1M-BNG1", "macbook", "@example.com", "two words@example.com"} {
+		if namesAPerson(bad) {
+			t.Errorf("namesAPerson(%q) = true, want false", bad)
+		}
+	}
+}
+
+// The comment is pasted into a shell command, so a stray .local or an empty
+// half would be visible in the output.
+func TestLocalIdentityIsShellSafe(t *testing.T) {
+	id := localIdentity()
+	if id == "" {
+		t.Skip("no username or hostname available here")
+	}
+	if strings.HasSuffix(id, ".local") {
+		t.Errorf("localIdentity() = %q, the mDNS suffix should be trimmed", id)
+	}
+	user, host, ok := strings.Cut(id, "@")
+	if !ok || user == "" || host == "" {
+		t.Errorf("localIdentity() = %q, want user@host", id)
+	}
+	if strings.ContainsAny(id, " \t\"'") {
+		t.Errorf("localIdentity() = %q, which would break the quoted -C argument", id)
+	}
+}

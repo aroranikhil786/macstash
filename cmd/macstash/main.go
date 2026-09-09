@@ -863,11 +863,54 @@ func containsHost(hosts []bundle.SSHHost, name string) bool {
 // user@oldmachine and is what makes a key identifiable in a list of them.
 func keyComment(keys []bundle.SSHKey) string {
 	for _, k := range keys {
-		if strings.Contains(k.Comment, "@") {
+		if namesAPerson(k.Comment) {
 			return k.Comment
 		}
 	}
+	if id := localIdentity(); id != "" {
+		return id
+	}
 	return "your@email"
+}
+
+// namesAPerson reports whether a key comment identifies its owner rather than
+// the machine the key was made on.
+//
+// ssh-keygen's default comment is user@hostname with the short hostname, so the
+// dot is what separates the two cases: "nikhil@example.com" names a person and
+// "nikhil.arora@officemac1" names a laptop that is being replaced.
+func namesAPerson(comment string) bool {
+	comment = strings.TrimSpace(comment)
+	if comment == "" || strings.ContainsAny(comment, " \t") {
+		return false
+	}
+	local, domain, ok := strings.Cut(comment, "@")
+	if !ok || local == "" {
+		return false
+	}
+	return strings.Contains(strings.Trim(domain, "."), ".")
+}
+
+// localIdentity builds the user@host comment ssh-keygen would write by default
+// on this machine, so a regenerated key is labelled with where it now lives.
+func localIdentity() string {
+	name := os.Getenv("USER")
+	if name == "" {
+		if u, err := user.Current(); err == nil {
+			name = u.Username
+		}
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	// macOS reports the mDNS name. Nobody refers to their laptop with a .local
+	// on the end, and ssh-keygen does not put one in the comment either.
+	host = strings.TrimSuffix(host, ".local")
+	if name == "" || host == "" {
+		return ""
+	}
+	return name + "@" + host
 }
 
 // printRepos reports git working trees, leading with the ones that would lose
