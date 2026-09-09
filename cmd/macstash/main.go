@@ -66,6 +66,10 @@ Flags:
                       (off by default: it downloads and installs GUI software)
   --clone-repos       clone the recorded repositories during restore (off by
                       default: needs your SSH key and any VPN to be in place)
+  --extensions-to <editor>  install every recorded editor extension into this
+                      editor instead of the one it was captured from. These are
+                      all VS Code forks and take the same ids, so a bundle from
+                      stable works on a machine running only Insiders.
   --select            open a selection file in $EDITOR and prune what is
                       captured or restored: apps, repos, packages, configs
   --selection <path>  reuse a selection file saved earlier, without an editor
@@ -97,6 +101,7 @@ type flags struct {
 	cloneRepos        bool
 	selectItems       bool
 	selectionFile     string
+	extensionsTo      string
 	prune             bool
 	to                string
 	launchAgents      bool
@@ -141,6 +146,13 @@ func parse(argv []string) (*flags, error) {
 			}
 			i++
 			f.selectionFile = argv[i]
+		case "--extensions-to":
+			if i+1 >= len(argv) {
+				return nil, fmt.Errorf("--extensions-to needs an editor name (%s)",
+					strings.Join(restore.KnownEditors(), ", "))
+			}
+			i++
+			f.extensionsTo = argv[i]
 		case "--prune":
 			f.prune = true
 		case "--to":
@@ -1073,6 +1085,13 @@ func cmdRestore(f *flags) error {
 	if len(f.args) != 1 {
 		return fmt.Errorf("usage: macstash restore <bundle.tar.gz> [--apply]")
 	}
+	// Checked before anything is unpacked: a typo found halfway through means
+	// running the restore again.
+	if f.extensionsTo != "" {
+		if err := restore.CheckEditorTarget(f.extensionsTo); err != nil {
+			return err
+		}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -1164,7 +1183,7 @@ func cmdRestore(f *flags) error {
 	if !f.apply {
 		p.RestoreSDKs(os.Stdout, false)
 		p.RestoreToolchains(os.Stdout, false)
-		p.RestoreExtensions(os.Stdout, false)
+		p.RestoreExtensions(os.Stdout, false, f.extensionsTo)
 		if f.installApps {
 			if err := restore.InstallApps(selectedApps, false, os.Stdout); err != nil {
 				return err
@@ -1218,7 +1237,7 @@ func cmdRestore(f *flags) error {
 	if err := p.RestorePrefs(os.Stdout); err != nil {
 		return err
 	}
-	p.RestoreExtensions(os.Stdout, true)
+	p.RestoreExtensions(os.Stdout, true, f.extensionsTo)
 	p.RestoreToolchains(os.Stdout, f.installToolchains)
 
 	if err := p.WriteManifest(home); err != nil {

@@ -231,7 +231,7 @@ func toolchainInstallArgs(manager, pkg string) []string {
 // whole reason they were captured. And a failed install is counted and named:
 // the exit status used to be discarded, so a run where every extension failed
 // looked exactly like a run where every one succeeded.
-func (p *Plan) RestoreExtensions(out io.Writer, apply bool) {
+func (p *Plan) RestoreExtensions(out io.Writer, apply bool, target string) {
 	ext := p.Manifest.System.Extensions
 	if len(ext) == 0 {
 		return
@@ -244,33 +244,126 @@ func (p *Plan) RestoreExtensions(out io.Writer, apply bool) {
 	}
 	sort.Strings(editors)
 
+	if target != "" {
+		ids := mergedExtensions(ext)
+		fmt.Fprintf(out, "  %-14s %d extension(s), from %s in the bundle\n",
+			target, len(ids), strings.Join(editors, " and "))
+		installExtensions(out, target, ids, apply)
+		return
+	}
+
+	var missing bool
 	for _, editor := range editors {
 		ids := ext[editor]
 		fmt.Fprintf(out, "  %-14s %d extension(s)\n", editor, len(ids))
-		bin, found := editorCommand(editor)
-		if !found {
-			fmt.Fprintf(out, "  %-14s (%s is not installed here — install these by hand once it is)\n",
-				"", editor)
+		if _, found := editorCommand(editor); !found {
+			missing = true
+			fmt.Fprintf(out, "  %-14s (%s is not installed here)\n", "", editor)
 			for _, id := range ids {
 				fmt.Fprintf(out, "    %s\n", id)
 			}
 			continue
 		}
-		if !apply {
-			continue
-		}
-		var failed []string
-		for _, id := range ids {
-			cmd := exec.Command(bin, "--install-extension", id, "--force")
-			if err := cmd.Run(); err != nil {
-				failed = append(failed, id)
-			}
-		}
-		fmt.Fprintf(out, "  %-14s installed %d, failed %d\n", "", len(ids)-len(failed), len(failed))
-		for _, id := range failed {
-			fmt.Fprintf(out, "    failed: %s\n", id)
+		installExtensions(out, editor, ids, apply)
+	}
+	if missing {
+		offerAnotherEditor(out)
+	}
+}
+
+// installExtensions runs the editor's own command once per extension.
+func installExtensions(out io.Writer, editor string, ids []string, apply bool) {
+	bin, found := editorCommand(editor)
+	if !found || !apply {
+		return
+	}
+	var failed []string
+	for _, id := range ids {
+		cmd := exec.Command(bin, "--install-extension", id, "--force")
+		if err := cmd.Run(); err != nil {
+			failed = append(failed, id)
 		}
 	}
+	fmt.Fprintf(out, "  %-14s installed %d, failed %d\n", "", len(ids)-len(failed), len(failed))
+	for _, id := range failed {
+		fmt.Fprintf(out, "    failed: %s\n", id)
+	}
+}
+
+// offerAnotherEditor names the editors that could take the extensions instead.
+//
+// These are all VS Code forks and accept the same extension ids, so a bundle
+// captured from stable is useful on a machine running only Insiders. Restore
+// does not redirect on its own: which editor someone wants their extensions in
+// is a preference, not something to infer from what happens to be installed.
+// Printing the flag beside the list is the difference between a dead end and a
+// second command.
+func offerAnotherEditor(out io.Writer) {
+	here := InstalledEditors()
+	if len(here) == 0 {
+		fmt.Fprintf(out, "  %-14s Install one of these editors, then re-run to get the list above.\n", "")
+		return
+	}
+	fmt.Fprintf(out, "\n  Those extensions can go into an editor you do have. These take the same\n"+
+		"  ids, so re-run with whichever you want:\n")
+	for _, e := range here {
+		fmt.Fprintf(out, "    --extensions-to %s\n", e)
+	}
+}
+
+// mergedExtensions flattens every editor's list into one deduplicated set. A
+// machine running both stable and Insiders records shared extensions twice, and
+// installing the same id twice is only slower.
+func mergedExtensions(ext map[string][]string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, ids := range ext {
+		for _, id := range ids {
+			if !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// KnownEditors lists the editors macstash can install extensions into.
+func KnownEditors() []string {
+	names := make([]string, 0, len(editorApps))
+	for n := range editorApps {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// InstalledEditors returns the known editors present on this machine.
+func InstalledEditors() []string {
+	var out []string
+	for _, n := range KnownEditors() {
+		if _, ok := editorCommand(n); ok {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// CheckEditorTarget validates an --extensions-to value before the restore
+// starts. Finding a typo after the files are written means running the whole
+// thing again.
+func CheckEditorTarget(name string) error {
+	if _, ok := editorApps[name]; !ok {
+		return fmt.Errorf("no editor %q; macstash knows %s", name, strings.Join(KnownEditors(), ", "))
+	}
+	if _, ok := editorCommand(name); !ok {
+		if here := InstalledEditors(); len(here) > 0 {
+			return fmt.Errorf("%s is not installed here; these are: %s", name, strings.Join(here, ", "))
+		}
+		return fmt.Errorf("%s is not installed here", name)
+	}
+	return nil
 }
 
 // ReportOnly prints the things a restore cannot do anything about.
