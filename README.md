@@ -170,6 +170,19 @@ To reinstall one anyway, re-enable its line under `restore --select`.
 Git remotes and tap URLs are hidden by default, because terminal output gets
 screenshotted. `--unredacted` shows them.
 
+### Editor extensions
+
+Extensions are read from the manifest the editor maintains, not by running
+`code --list-extensions`. That command is not on anyone's PATH by default — it
+is added from inside the editor by someone who knew to — so relying on it meant
+capture silently recorded nothing on most machines. The machine this was written
+on had three editors holding 52 extensions between them and not one command on
+PATH.
+
+Restore installs them the same way round: PATH first, then the command that
+ships inside the application bundle, which is where it always is. Where the
+editor is not installed at all, the ids are printed instead of being skipped.
+
 ### SSH keys
 
 Neither half of a keypair is carried. The private key obviously stays behind;

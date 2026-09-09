@@ -23,7 +23,7 @@ func TestRestoreExtensionsListsTheIdsWhenTheEditorIsMissing(t *testing.T) {
 	p.RestoreExtensions(&buf, false)
 
 	out := buf.String()
-	if !strings.Contains(out, "not on PATH") {
+	if !strings.Contains(out, "not installed here") {
 		t.Errorf("want the missing editor reported, got:\n%s", out)
 	}
 	for _, id := range []string{"golang.go", "vscodevim.vim"} {
@@ -57,5 +57,35 @@ func TestRestoreExtensionsCountsAndNamesFailures(t *testing.T) {
 	}
 	if !strings.Contains(out, "failed: golang.go") {
 		t.Errorf("want the failures named, got:\n%s", out)
+	}
+}
+
+// The editor's command-line tool is not on PATH by default — adding it is a
+// manual step inside the editor. Refusing to install extensions on that basis,
+// when the binary ships inside the application, is the wrong answer.
+func TestEditorCommandIsFoundInsideTheApplication(t *testing.T) {
+	const app = "Visual Studio Code - Insiders"
+	bin := "/Applications/" + app + ".app/Contents/Resources/app/bin"
+	if _, err := os.Stat(bin); err != nil {
+		t.Skipf("%s is not installed here", app)
+	}
+
+	path, ok := editorCommand("code-insiders")
+
+	if !ok {
+		t.Fatalf("the bundled command was not found under %s", bin)
+	}
+	if !strings.HasPrefix(path, bin) {
+		t.Errorf("found %q, want something under the application bundle", path)
+	}
+	// It is called "code" in Insiders, so a name guess would have missed it.
+	if strings.Contains(path, "tunnel") {
+		t.Errorf("found the tunnel helper %q rather than the editor command", path)
+	}
+}
+
+func TestEditorCommandOnAnUnknownEditor(t *testing.T) {
+	if _, ok := editorCommand("macstash-no-such-editor"); ok {
+		t.Error("an unknown editor must not resolve to a command")
 	}
 }

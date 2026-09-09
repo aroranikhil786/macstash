@@ -247,9 +247,10 @@ func (p *Plan) RestoreExtensions(out io.Writer, apply bool) {
 	for _, editor := range editors {
 		ids := ext[editor]
 		fmt.Fprintf(out, "  %-14s %d extension(s)\n", editor, len(ids))
-		if !commandAvailable(editor) {
-			fmt.Fprintf(out, "  %-14s (%s is not on PATH here — install these by hand, or add\n"+
-				"  %-14s  the shell command from the editor and re-run)\n", "", editor, "")
+		bin, found := editorCommand(editor)
+		if !found {
+			fmt.Fprintf(out, "  %-14s (%s is not installed here — install these by hand once it is)\n",
+				"", editor)
 			for _, id := range ids {
 				fmt.Fprintf(out, "    %s\n", id)
 			}
@@ -260,7 +261,7 @@ func (p *Plan) RestoreExtensions(out io.Writer, apply bool) {
 		}
 		var failed []string
 		for _, id := range ids {
-			cmd := exec.Command(editor, "--install-extension", id, "--force")
+			cmd := exec.Command(bin, "--install-extension", id, "--force")
 			if err := cmd.Run(); err != nil {
 				failed = append(failed, id)
 			}
@@ -344,6 +345,57 @@ func (p *Plan) WriteManifest(home string) error {
 func commandAvailable(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
+}
+
+// editorApps maps an editor's command to the application that ships it.
+var editorApps = map[string]string{
+	"code":          "Visual Studio Code",
+	"code-insiders": "Visual Studio Code - Insiders",
+	"cursor":        "Cursor",
+	"windsurf":      "Windsurf",
+}
+
+// editorCommand finds the binary that installs an extension.
+//
+// PATH first, then inside the application itself. Every one of these editors
+// ships its command-line tool at Contents/Resources/app/bin, and putting it on
+// PATH is a manual step from inside the editor that most people never take.
+// Refusing to install 39 extensions because of that, when the binary is sitting
+// at a known path, is a worse answer than looking for it.
+//
+// The binary is found by reading that directory rather than by guessing its
+// name: in Visual Studio Code - Insiders it is called "code", not
+// "code-insiders", and names differ across the forks. Tunnel helpers live there
+// too and are skipped.
+func editorCommand(name string) (string, bool) {
+	if path, err := exec.LookPath(name); err == nil {
+		return path, true
+	}
+	app, ok := editorApps[name]
+	if !ok {
+		return "", false
+	}
+	dirs := []string{"/Applications"}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, "Applications"))
+	}
+	for _, d := range dirs {
+		bin := filepath.Join(d, app+".app", "Contents", "Resources", "app", "bin")
+		entries, err := os.ReadDir(bin)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || strings.Contains(e.Name(), "tunnel") {
+				continue
+			}
+			path := filepath.Join(bin, e.Name())
+			if info, err := os.Stat(path); err == nil && info.Mode()&0o111 != 0 {
+				return path, true
+			}
+		}
+	}
+	return "", false
 }
 
 func truncate(s []string, n int) []string {

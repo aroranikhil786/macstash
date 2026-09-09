@@ -18,5 +18,5 @@ restore:
     ~/.cursor/mcp.json is never captured: MCP server definitions hold their
     credentials inline in `env`, so the file cannot be separated from its
     secrets. Re-add your MCP servers by hand. Extensions are captured as a list
-    of ids and reinstalled with `cursor --install-extension`, which needs the
-    `cursor` command on PATH at both ends.
+    of ids and reinstalled with `cursor --install-extension`; neither end needs
+    that command on your PATH.

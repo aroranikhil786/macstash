@@ -623,8 +623,8 @@ func countNamespaced(m map[string][]string) (int, []string) {
 // exactly that, which is how a stale note survives.
 func printSystemInventory(s bundle.System, verbose bool) {
 	if n, _ := countNamespaced(s.Extensions); n > 0 {
-		fmt.Printf("\nEditor extensions: %d recorded — restore reinstalls these where the\n"+
-			"                   editor's command-line tool is on PATH\n", n)
+		fmt.Printf("\nEditor extensions: %d recorded — restore reinstalls these wherever the\n"+
+			"                   editor itself is installed\n", n)
 		printNamespaced(s.Extensions, "extension", verbose)
 	}
 	if n, _ := countNamespaced(s.Toolchains); n > 0 {

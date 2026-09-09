@@ -15,8 +15,8 @@ capture:
 restore:
   note: |
     Extensions are captured as a list of ids and reinstalled during restore with
-    `code --install-extension`. Both ends need the `code` command on PATH: if it
-    was missing at capture the list is empty, and if it is missing here the ids
-    are printed for you to install by hand. Add it from the command palette,
-    "Shell Command: Install 'code' command in PATH".
+    `code --install-extension`. Neither end needs that command on your PATH: the
+    list is read from the extensions manifest VS Code maintains, and the command
+    is found inside the application itself. If VS Code is not installed here yet,
+    the ids are printed instead so you can install them once it is.
     Saved credentials live in globalStorage, which is never captured.

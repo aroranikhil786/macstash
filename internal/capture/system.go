@@ -2,6 +2,7 @@ package capture
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -187,17 +188,75 @@ func scanToolchains() map[string][]string {
 	return t
 }
 
+// editorDataDirs maps the command that installs an extension to the directory
+// where that editor keeps its extension manifest.
+var editorDataDirs = map[string]string{
+	"code":          ".vscode",
+	"code-insiders": ".vscode-insiders",
+	"cursor":        ".cursor",
+	"windsurf":      ".windsurf",
+}
+
 // scanEditorExtensions lists installed editor extensions by id.
+//
+// The manifest is read first and the command-line tool is only a fallback.
+// Asking `code --list-extensions` requires that command to be on PATH, and it
+// is not there by default — it is added from inside the editor, by someone who
+// knew to. On the machine this was written on, three editors held 52 extensions
+// between them and not one command was on PATH, so capture recorded nothing and
+// said nothing. The manifest needs no PATH, no running editor and no exec: it is
+// the file the editor itself maintains, already deduplicated, and it is there
+// whether or not anyone ever ran the shell-command installer.
 func scanEditorExtensions() map[string][]string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = ""
+	}
 	ext := map[string][]string{}
-	for _, editor := range []string{"code", "code-insiders", "cursor", "windsurf"} {
-		if out, ok := run(editor, "--list-extensions"); ok {
-			if l := lines(out); len(l) > 0 {
-				ext[editor] = l
+	for editor, dir := range editorDataDirs {
+		ids := extensionsFromManifest(filepath.Join(home, dir))
+		if len(ids) == 0 {
+			if out, ok := run(editor, "--list-extensions"); ok {
+				ids = lines(out)
 			}
+		}
+		if len(ids) > 0 {
+			ext[editor] = ids
 		}
 	}
 	return ext
+}
+
+// extensionsFromManifest reads <dir>/extensions/extensions.json, which VS Code
+// and its forks maintain as the record of what is installed.
+//
+// Listing the extensions directory instead would be wrong: old versions are
+// never removed, so this machine has 41 directories for 7 extensions.
+func extensionsFromManifest(dir string) []string {
+	data, err := os.ReadFile(filepath.Join(dir, "extensions", "extensions.json"))
+	if err != nil {
+		return nil
+	}
+	var entries []struct {
+		Identifier struct {
+			ID string `json:"id"`
+		} `json:"identifier"`
+	}
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var ids []string
+	for _, e := range entries {
+		id := strings.TrimSpace(e.Identifier.ID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // scanLoginItems lists what starts at login. Reported only: adding login items
