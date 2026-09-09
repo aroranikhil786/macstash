@@ -2,7 +2,10 @@ package restore
 
 import (
 	"bytes"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -171,5 +174,142 @@ func TestInstallAppsApplyReportsAFailingCaskWithoutAborting(t *testing.T) {
 	// A bare count with no reason leaves the user with nothing to act on.
 	if !strings.Contains(strings.ToLower(out), "cask") {
 		t.Errorf("brew's explanation should reach the user, got:\n%s", out)
+	}
+}
+
+// fakeApp plants an .app bundle carrying a version, so presence and version
+// reading can be exercised without depending on what this machine has.
+func fakeApp(t *testing.T, dir, name, version string) {
+	t.Helper()
+	contents := filepath.Join(dir, name+".app", "Contents")
+	if err := os.MkdirAll(contents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleShortVersionString</key><string>%s</string>
+</dict></plist>
+`, version)
+	if err := os.WriteFile(filepath.Join(contents, "Info.plist"), []byte(plist), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func useAppDir(t *testing.T, dir string) {
+	t.Helper()
+	old := appSearchDirs
+	appSearchDirs = func() []string { return []string{dir} }
+	t.Cleanup(func() { appSearchDirs = old })
+}
+
+func TestPlanAppsReadsTheInstalledVersion(t *testing.T) {
+	dir := t.TempDir()
+	useAppDir(t, dir)
+	fakeApp(t, dir, "Slack", "4.50.1")
+
+	installable, _ := PlanApps([]bundle.App{
+		{Name: "Slack", Source: "manual", Version: "4.47.65", CaskToken: "slack"},
+	})
+
+	if len(installable) != 1 {
+		t.Fatalf("installable = %+v, want one", installable)
+	}
+	got := installable[0]
+	if !got.Present || got.Have != "4.50.1" || got.Want != "4.47.65" {
+		t.Fatalf("got %+v, want present with have=4.50.1 want=4.47.65", got)
+	}
+}
+
+// The whole point of reporting drift is that it changes nothing. An app that is
+// here in a different version must stay out of the install list.
+func TestADifferentVersionIsStillNotReinstalled(t *testing.T) {
+	dir := t.TempDir()
+	useAppDir(t, dir)
+	fakeApp(t, dir, "Slack", "4.50.1")
+	var buf bytes.Buffer
+
+	err := InstallApps([]bundle.App{
+		{Name: "Slack", Source: "manual", Version: "4.47.65", CaskToken: "slack"},
+	}, false, &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(buf.String(), "brew install --cask slack") {
+		t.Errorf("an app already here must not be queued for install:\n%s", buf.String())
+	}
+}
+
+// A version difference that is skipped silently leaves the user believing they
+// have what the bundle recorded.
+func TestInstallAppsNamesTheVersionDrift(t *testing.T) {
+	dir := t.TempDir()
+	useAppDir(t, dir)
+	fakeApp(t, dir, "Slack", "4.50.1")
+	var buf bytes.Buffer
+
+	if err := InstallApps([]bundle.App{
+		{Name: "Slack", Source: "manual", Version: "4.47.65", CaskToken: "slack"},
+	}, false, &buf); err != nil {
+		t.Fatal(err)
+	}
+
+	out := buf.String()
+	for _, want := range []string{"Slack", "4.50.1", "4.47.65"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("want %q in the report, got:\n%s", want, out)
+		}
+	}
+	// Saying it differs without saying nothing happens invites the wrong
+	// conclusion, which is that macstash handled it.
+	if !strings.Contains(out, "Nothing is upgraded") {
+		t.Errorf("the report must say it acted on nothing, got:\n%s", out)
+	}
+}
+
+// Matching versions are not a difference, and neither is a missing one.
+func TestNoDriftIsReportedWhenTheVersionsAgreeOrAreUnknown(t *testing.T) {
+	dir := t.TempDir()
+	useAppDir(t, dir)
+	fakeApp(t, dir, "Slack", "4.47.65")
+	fakeApp(t, dir, "Rectangle", "0.86")
+	var buf bytes.Buffer
+
+	if err := InstallApps([]bundle.App{
+		{Name: "Slack", Source: "manual", Version: "4.47.65", CaskToken: "slack"},
+		{Name: "Rectangle", Source: "manual", CaskToken: "rectangle"}, // no recorded version
+	}, false, &buf); err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(buf.String(), "in the bundle:") {
+		t.Errorf("no drift should be claimed, got:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "2 already here") {
+		t.Errorf("both should be counted as present, got:\n%s", buf.String())
+	}
+}
+
+func TestStatusAndDrifted(t *testing.T) {
+	cases := []struct {
+		name    string
+		app     AppInstall
+		drifted bool
+		status  string
+	}{
+		{"absent", AppInstall{Present: false, Want: "1.0"}, false, ""},
+		{"same", AppInstall{Present: true, Have: "1.0", Want: "1.0"}, false, "already installed, 1.0"},
+		{"different", AppInstall{Present: true, Have: "2.0", Want: "1.0"}, true,
+			"already installed — 2.0 here, 1.0 in the bundle"},
+		{"unknown here", AppInstall{Present: true, Want: "1.0"}, false, "already installed"},
+		{"unknown in bundle", AppInstall{Present: true, Have: "2.0"}, false, "already installed, 2.0"},
+	}
+	for _, c := range cases {
+		if got := c.app.Drifted(); got != c.drifted {
+			t.Errorf("%s: Drifted() = %v, want %v", c.name, got, c.drifted)
+		}
+		if got := c.app.Status(); got != c.status {
+			t.Errorf("%s: Status() = %q, want %q", c.name, got, c.status)
+		}
 	}
 }

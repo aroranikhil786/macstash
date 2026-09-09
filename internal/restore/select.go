@@ -54,7 +54,7 @@ func SelectionDocument(p *Plan, home string) selection.Document {
 			for _, a := range installable {
 				note := "brew install --cask " + a.Token
 				if a.Present {
-					note = "already installed"
+					note = a.Status()
 				}
 				items = append(items, selection.Item{
 					Key: a.Name, Note: note, Selected: !a.Present,
@@ -63,7 +63,8 @@ func SelectionDocument(p *Plan, home string) selection.Document {
 			d.Categories = append(d.Categories, selection.Category{
 				Name: CatApps,
 				Help: "Applications Homebrew can install. Ones already here are\n" +
-					"pre-excluded; re-enable a line to reinstall it anyway.",
+					"pre-excluded, and say so with their installed version where it\n" +
+					"differs from the bundle's; re-enable a line to reinstall it anyway.",
 				Items: items,
 			})
 		}

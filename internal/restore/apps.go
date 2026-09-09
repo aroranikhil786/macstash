@@ -1,6 +1,7 @@
 package restore
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,11 @@ type AppInstall struct {
 	Name    string
 	Token   string
 	Present bool
+	// Want is the version the bundle recorded; Have is the version already on
+	// this machine. Both are CFBundleShortVersionString, read the same way at
+	// capture and at restore, so comparing them as strings is meaningful.
+	Want string
+	Have string
 }
 
 // PlanApps works out which recorded applications are missing here and which of
@@ -32,8 +38,9 @@ func PlanApps(apps []bundle.App) (installable []AppInstall, unmanaged []string) 
 		if a.Source == "homebrew" || a.Source == "system" {
 			continue
 		}
+		have, present := installedApp(a.Name)
 		if a.CaskToken == "" {
-			if !appPresent(a.Name) {
+			if !present {
 				unmanaged = append(unmanaged, a.Name)
 			}
 			continue
@@ -41,7 +48,9 @@ func PlanApps(apps []bundle.App) (installable []AppInstall, unmanaged []string) 
 		installable = append(installable, AppInstall{
 			Name:    a.Name,
 			Token:   a.CaskToken,
-			Present: appPresent(a.Name),
+			Present: present,
+			Want:    a.Version,
+			Have:    have,
 		})
 	}
 	sort.Slice(installable, func(i, j int) bool { return installable[i].Name < installable[j].Name })
@@ -49,18 +58,72 @@ func PlanApps(apps []bundle.App) (installable []AppInstall, unmanaged []string) 
 	return installable, unmanaged
 }
 
-// appPresent reports whether an app bundle is already on this machine.
-func appPresent(name string) bool {
+// appSearchDirs is where an installed application is looked for. It is a
+// variable so tests can point it at a fixture tree instead of depending on
+// whatever happens to be installed on the machine running them.
+var appSearchDirs = func() []string {
 	dirs := []string{"/Applications", "/Applications/Utilities"}
 	if home, err := os.UserHomeDir(); err == nil {
 		dirs = append(dirs, filepath.Join(home, "Applications"))
 	}
-	for _, d := range dirs {
-		if _, err := os.Stat(filepath.Join(d, name+".app")); err == nil {
-			return true
+	return dirs
+}
+
+// installedApp reports whether an app bundle is already on this machine, and
+// which version it is.
+//
+// Presence alone decides whether restore touches it; the version is carried so
+// a difference can be reported. Upgrading, downgrading or adopting an
+// application the user already installed is not a migration tool's call to
+// make, but leaving them to assume they have the bundle's version is worse.
+func installedApp(name string) (version string, present bool) {
+	for _, d := range appSearchDirs() {
+		path := filepath.Join(d, name+".app")
+		if _, err := os.Stat(path); err != nil {
+			continue
 		}
+		return appVersion(path), true
 	}
-	return false
+	return "", false
+}
+
+// appVersion reads CFBundleShortVersionString from an installed app — the same
+// key capture read, so the two versions compare. An unreadable plist yields "",
+// which every caller treats as "no version to compare" rather than a mismatch.
+func appVersion(appPath string) string {
+	out, err := exec.Command("plutil", "-convert", "json", "-o", "-",
+		filepath.Join(appPath, "Contents", "Info.plist")).Output()
+	if err != nil {
+		return ""
+	}
+	var info struct {
+		Version string `json:"CFBundleShortVersionString"`
+	}
+	if err := json.Unmarshal(out, &info); err != nil {
+		return ""
+	}
+	return info.Version
+}
+
+// Drifted reports whether what is installed differs from what the bundle
+// recorded. Missing a version on either side is not a difference.
+func (a AppInstall) Drifted() bool {
+	return a.Present && a.Have != "" && a.Want != "" && a.Have != a.Want
+}
+
+// Status describes an application that is already here, naming the version
+// difference where there is one.
+func (a AppInstall) Status() string {
+	switch {
+	case !a.Present:
+		return ""
+	case a.Drifted():
+		return fmt.Sprintf("already installed — %s here, %s in the bundle", a.Have, a.Want)
+	case a.Have != "":
+		return "already installed, " + a.Have
+	default:
+		return "already installed"
+	}
 }
 
 // InstallApps installs missing applications with Homebrew.
@@ -91,9 +154,7 @@ func InstallApps(apps []bundle.App, apply bool, out io.Writer) error {
 				fmt.Fprintf(out, "  install  %-32s brew install --cask %s\n", a.Name, a.Token)
 			}
 		}
-		if n := len(installable) - len(todo); n > 0 {
-			fmt.Fprintf(out, "\n%d already here.\n", n)
-		}
+		reportPresent(installable, out)
 		reportUnmanaged(unmanaged, out)
 		fmt.Fprintln(out, "\nNothing was installed. Re-run with --apply --install-apps.")
 		return nil
@@ -101,6 +162,7 @@ func InstallApps(apps []bundle.App, apply bool, out io.Writer) error {
 
 	if len(todo) == 0 {
 		fmt.Fprintln(out, "\nEvery application Homebrew can install is already here.")
+		reportDrift(installable, out)
 		reportUnmanaged(unmanaged, out)
 		return nil
 	}
@@ -131,8 +193,48 @@ func InstallApps(apps []bundle.App, apply bool, out io.Writer) error {
 	}
 
 	fmt.Fprintf(out, "\ninstalled %d, failed %d\n", installed, failed)
+	reportDrift(installable, out)
 	reportUnmanaged(unmanaged, out)
 	return nil
+}
+
+// reportPresent accounts for the applications restore is leaving alone.
+func reportPresent(installable []AppInstall, out io.Writer) {
+	present := 0
+	for _, a := range installable {
+		if a.Present {
+			present++
+		}
+	}
+	if present == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\n%d already here and left alone.\n", present)
+	reportDrift(installable, out)
+}
+
+// reportDrift names the applications whose installed version differs from the
+// one the bundle recorded.
+//
+// Restore deliberately does not upgrade them: presence is decided by name, and
+// overwriting an application the user installed themselves is destructive. But
+// skipping in silence would leave them believing they have the version the
+// bundle carried, so the difference is stated even though nothing acts on it.
+func reportDrift(installable []AppInstall, out io.Writer) {
+	var drifted []AppInstall
+	for _, a := range installable {
+		if a.Drifted() {
+			drifted = append(drifted, a)
+		}
+	}
+	if len(drifted) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\n%d differ from the version in the bundle. Nothing is upgraded or\n"+
+		"reinstalled — this is only so you know:\n", len(drifted))
+	for _, a := range drifted {
+		fmt.Fprintf(out, "  %-32s %s here, %s in the bundle\n", a.Name, a.Have, a.Want)
+	}
 }
 
 func reportUnmanaged(unmanaged []string, out io.Writer) {

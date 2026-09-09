@@ -165,3 +165,29 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+// The selection file is where most people will see the drift, so the note has
+// to carry it rather than a bare "already installed".
+func TestSelectionNoteNamesTheInstalledVersion(t *testing.T) {
+	dir := t.TempDir()
+	useAppDir(t, dir)
+	fakeApp(t, dir, "Slack", "4.50.1")
+	p := &Plan{Manifest: &bundle.Manifest{Applications: []bundle.App{
+		{Name: "Slack", Source: "manual", Version: "4.47.65", CaskToken: "slack"},
+	}}}
+
+	d := SelectionDocument(p, t.TempDir())
+
+	var item selection.Item
+	for _, c := range d.Categories {
+		if c.Name == CatApps {
+			item = c.Items[0]
+		}
+	}
+	if item.Selected {
+		t.Error("an app already here should stay pre-deselected despite the drift")
+	}
+	if want := "already installed — 4.50.1 here, 4.47.65 in the bundle"; item.Note != want {
+		t.Errorf("note = %q, want %q", item.Note, want)
+	}
+}

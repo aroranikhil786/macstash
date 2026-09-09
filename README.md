@@ -150,6 +150,23 @@ of them have a cask anyway. On the machine this was developed against, all ten
 resolves the cask at capture and hands the list to Homebrew; it never downloads
 from a URL it chose itself.
 
+An application already on the new machine is left alone, whatever version it is
+and however it got there — presence is decided by the `.app` name, not by asking
+Homebrew. macstash will not upgrade it, downgrade it, or adopt a hand-installed
+copy into Homebrew: overwriting software you installed yourself is not a
+migration tool's decision. It does say when the versions differ, because
+skipping in silence would leave you assuming you have what the bundle recorded.
+
+```
+10 already here and left alone.
+
+1 differ from the version in the bundle. Nothing is upgraded or
+reinstalled — this is only so you know:
+  Arc                              1.157.1 here, 1.100.0 in the bundle
+```
+
+To reinstall one anyway, re-enable its line under `restore --select`.
+
 Git remotes and tap URLs are hidden by default, because terminal output gets
 screenshotted. `--unredacted` shows them.
 
