@@ -552,3 +552,51 @@ func TestAnUntestablePermissionSaysSo(t *testing.T) {
 		t.Errorf("want the limit stated, got %q", checks[0].Detail)
 	}
 }
+
+// The gap that prompted this check: a bundle from a JVM developer's machine
+// recorded no Java at all, because the runtime scan only knew version managers.
+// Now that the JDKs are recorded, the ones that did not survive the migration
+// have to be named.
+func TestJDKRecordedButNotInstalledIsReported(t *testing.T) {
+	man := &bundle.Manifest{System: bundle.System{JDKs: []bundle.JDK{
+		{Version: "99.0.1", Vendor: "Azul Systems, Inc.", Path: "/x"},
+	}}}
+	checks := problems(checkJDKs(t.TempDir(), man))
+	if len(checks) != 1 {
+		t.Fatalf("got %+v; want the missing JDK reported", checks)
+	}
+	if !strings.Contains(checks[0].Detail, "99") {
+		t.Errorf("detail does not name the version: %q", checks[0].Detail)
+	}
+	if checks[0].Fix == "" {
+		t.Error("no fix offered for a JDK Homebrew can install")
+	}
+}
+
+// The shell configuration is the other half, and it fails independently: a
+// machine can have every JDK the bundle recorded and still hold an alias asking
+// for one it does not. java_home answers that with the default JDK and exits
+// zero, so the alias reports success and hands over the wrong Java.
+func TestShellConfigAskingForAnAbsentJavaIsReported(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, home, ".zshrc", "alias j99=\"export JAVA_HOME=$(/usr/libexec/java_home -v 99.0.1)\"\n")
+
+	checks := problems(checkJDKs(home, &bundle.Manifest{}))
+	if len(checks) != 1 {
+		t.Fatalf("got %+v; want the unresolvable alias reported", checks)
+	}
+	if !strings.Contains(checks[0].Detail, "99.0.1") {
+		t.Errorf("detail does not name the version the alias asks for: %q", checks[0].Detail)
+	}
+	if !strings.Contains(checks[0].Detail, "default") {
+		t.Errorf("detail does not explain the silent fallback: %q", checks[0].Detail)
+	}
+}
+
+// A machine with no Java anywhere, and a bundle that records none, must not
+// invent a problem to report.
+func TestNoJavaAnywhereReportsNothing(t *testing.T) {
+	if checks := checkJDKs(t.TempDir(), &bundle.Manifest{}); len(checks) != 0 {
+		t.Errorf("got %+v; want nothing said about Java", checks)
+	}
+}

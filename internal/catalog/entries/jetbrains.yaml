@@ -1,0 +1,24 @@
+id: jetbrains
+name: JetBrains IDEs
+category: editor
+detect:
+  path: ~/Library/Application Support/JetBrains
+capture:
+  paths:
+    # The JDK table only. It maps the SDK names projects refer to onto the JDK
+    # paths on this machine, and it is the reason a cloned project opens with
+    # "Project SDK is not defined" on a new laptop: the project names a JDK, and
+    # nothing on the new machine knows what that name means.
+    - path: ~/Library/Application Support/JetBrains/*/options/jdk.table.xml
+      class: public
+restore:
+  note: |
+    The JetBrains JDK table is restored, but it points at the paths the old
+    machine used. Install the JDKs first — the Java section of this restore
+    lists them — and then check the SDK list in Settings › Build, Execution,
+    Deployment › Build Tools, because a JDK installed by a different vendor
+    lands in a different directory.
+
+    The table is restored under the IDE version it came from. If this machine
+    runs a newer IntelliJ, copy it across to that version's directory, or let
+    the IDE import settings from the old one on first launch.

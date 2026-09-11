@@ -32,7 +32,7 @@ import (
 // -ldflags "-X main.Version=...". It must stay a var: the Go linker silently
 // ignores -X on a const, so declaring it const would ship every release
 // labelled 0.1.0-dev, and record that wrong version in every bundle manifest.
-var Version = "0.2.11-dev"
+var Version = "0.2.11"
 
 const usage = `macstash — capture a macOS development environment and rebuild it elsewhere
 
@@ -634,6 +634,18 @@ func countNamespaced(m map[string][]string) (int, []string) {
 // bundle that does not have them — and the VS Code restore note used to say
 // exactly that, which is how a stale note survives.
 func printSystemInventory(s bundle.System, verbose bool) {
+	if len(s.JDKs) > 0 {
+		fmt.Printf("\nJava runtimes: %d recorded — a JDK is installed as a package rather\n"+
+			"               than through a version manager, so the version each\n"+
+			"               project builds against lives only here\n", len(s.JDKs))
+		for _, j := range s.JDKs {
+			vendor := j.Vendor
+			if j.Arch == "x86_64" {
+				vendor += ", Intel build"
+			}
+			fmt.Printf("  %-12s %s\n", j.Version, vendor)
+		}
+	}
 	if n, _ := countNamespaced(s.Extensions); n > 0 {
 		fmt.Printf("\nEditor extensions: %d recorded — restore reinstalls these wherever the\n"+
 			"                   editor itself is installed\n", n)
@@ -1208,6 +1220,7 @@ func cmdRestore(f *flags) error {
 	}
 
 	if !f.apply {
+		p.RestoreJDKs(os.Stdout, false)
 		p.RestoreSDKs(os.Stdout, false)
 		p.RestoreToolchains(os.Stdout, false)
 		p.RestoreExtensions(os.Stdout, false, f.extensionsTo)
@@ -1255,6 +1268,7 @@ func cmdRestore(f *flags) error {
 			return err
 		}
 	}
+	p.RestoreJDKs(os.Stdout, f.installApps)
 	p.RestoreSDKs(os.Stdout, true)
 
 	stamp := time.Now().Format("2006-01-02T15-04-05")
@@ -1344,6 +1358,18 @@ func printNextSteps(p *restore.Plan, f *flags, home string, repos []bundle.Repo)
 	}
 	for _, cmd := range restore.MissingTools(sys.SDKs) {
 		steps = append(steps, "Put back a runtime the old machine had:  "+cmd)
+	}
+	for _, gap := range restore.MissingJDKs(sys.JDKs) {
+		steps = append(steps, "Put back a Java runtime the old machine had:  "+gap.Instruction())
+	}
+	// The restored shell config names the versions it expects, and java_home
+	// answers a request it cannot satisfy with the default JDK rather than an
+	// error. Without this line the aliases look like they work.
+	if missing := missingJavaVersions(home); len(missing) > 0 {
+		steps = append(steps, fmt.Sprintf(
+			"Your shell config asks java_home for %s, which %s not installed here.\n"+
+				"     Those aliases will hand you whichever JDK is default instead of failing.",
+			strings.Join(missing, ", "), plural(len(missing), "is", "are")))
 	}
 	if n := restore.PendingExtensions(sys.Extensions); n > 0 {
 		if here := restore.InstalledEditors(); len(here) > 0 {
@@ -1763,4 +1789,24 @@ func offerBundleDeletion(path string, assumeYes bool) {
 	fmt.Println("Note: this is an ordinary delete. On an APFS SSD the underlying blocks may")
 	fmt.Println("survive, and a Time Machine local snapshot may still hold a copy. FileVault")
 	fmt.Println("is what actually protects this data at rest.")
+}
+
+// missingJavaVersions returns the Java versions the shell configuration asks for
+// and this machine cannot supply.
+func missingJavaVersions(home string) []string {
+	var missing []string
+	for _, v := range restore.JavaVersionsWanted(home) {
+		if !restore.JDKInstalled(v) {
+			missing = append(missing, v)
+		}
+	}
+	return missing
+}
+
+// plural picks the verb form for a count.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }

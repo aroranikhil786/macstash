@@ -203,10 +203,28 @@ never used from that machine leaves no local trace, and `known_hosts` entries
 with hashed hostnames cannot be read back, so they are counted rather than
 quietly dropped.
 
+### Java, because nothing else was looking for it
+
+A JDK on macOS is an installer package that lands in
+`/Library/Java/JavaVirtualMachines`, not something a version manager owns. A
+runtime scan built around SDKMAN, pyenv and nvm therefore reports a machine
+carrying five JDKs as having no Java on it at all, which is exactly what happened
+to the first JVM developer to use this. macstash reads the JVM index macOS keeps,
+records the vendor, version and architecture of every JDK, and names the Homebrew
+cask that replaces each one — saying so when the replacement is a different
+vendor, because Oracle publishes no free cask below 17.
+
+The shell configuration is read as well, and that is the half that bites. An
+alias asking `java_home` for a version this machine does not have is answered
+with the default JDK and an exit status of zero, so it reports success and hands
+over the wrong Java. `doctor` resolves every version the shell asks for and names
+the ones that cannot be satisfied.
+
 ### Things that are listed, never copied
 
-Repositories, applications, Docker images, SDK versions and MCP servers are
-recorded as inventory: enough to rebuild them, none of their contents.
+Repositories, applications, Docker images, SDK versions, Java runtimes and MCP
+servers are recorded as inventory: enough to rebuild them, none of their
+contents.
 
 MCP servers are the strictest case. A server definition holds its credentials
 inline, and there is no single place they live — the machine this was developed

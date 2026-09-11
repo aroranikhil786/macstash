@@ -58,6 +58,7 @@ func lines(s string) []string {
 func ScanSystem(home string) bundle.System {
 	var s bundle.System
 	s.SDKs = scanSDKs(home)
+	s.JDKs = scanJDKs(home)
 	s.Toolchains = scanToolchains()
 	s.Extensions = scanEditorExtensions()
 	s.LoginItems = scanLoginItems()
@@ -114,6 +115,15 @@ func scanSDKs(home string) map[string][]string {
 		}
 		if len(versions) > 0 {
 			sdks["nvm"] = versions
+		}
+	}
+	if entries, err := os.ReadDir(filepath.Join(home, ".jenv", "versions")); err == nil {
+		var versions []string
+		for _, e := range entries {
+			versions = append(versions, e.Name())
+		}
+		if len(versions) > 0 {
+			sdks["jenv"] = versions
 		}
 	}
 	if out, ok := run("pyenv", "versions", "--bare"); ok {

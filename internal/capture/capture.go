@@ -81,32 +81,33 @@ func Scan(home string, entries []catalog.Entry) (*Plan, error) {
 	for _, e := range entries {
 		found := false
 		for _, cp := range e.Capture.Paths {
-			abs := expand(home, cp.Path)
-			// Stat, not Lstat. Managing dotfiles with stow, a chezmoi source
-			// tree or a hand-rolled repo makes ~/.config/nvim a symlink to a
-			// directory — which is the norm for exactly the people this tool is
-			// for. Lstat reports that as a non-directory, the walk is skipped,
-			// and the entry still counts as detected: the report claims success
-			// while the bundle silently contains none of the configuration.
-			info, err := os.Stat(abs)
-			if err != nil {
-				continue // not on this machine, or a broken symlink
-			}
-			found = true
+			for _, abs := range matchPaths(home, cp.Path) {
+				// Stat, not Lstat. Managing dotfiles with stow, a chezmoi source
+				// tree or a hand-rolled repo makes ~/.config/nvim a symlink to a
+				// directory — which is the norm for exactly the people this tool is
+				// for. Lstat reports that as a non-directory, the walk is skipped,
+				// and the entry still counts as detected: the report claims success
+				// while the bundle silently contains none of the configuration.
+				info, err := os.Stat(abs)
+				if err != nil {
+					continue // not on this machine, or a broken symlink
+				}
+				found = true
 
-			if info.IsDir() {
-				// Walk the resolved directory, but keep the logical path for
-				// naming, so a symlinked tree lands where the user expects.
-				walkRoot := abs
-				if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-					walkRoot = resolved
+				if info.IsDir() {
+					// Walk the resolved directory, but keep the logical path for
+					// naming, so a symlinked tree lands where the user expects.
+					walkRoot := abs
+					if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+						walkRoot = resolved
+					}
+					if err := p.walkDir(home, e, cp, walkRoot, abs, seen); err != nil {
+						return nil, err
+					}
+					continue
 				}
-				if err := p.walkDir(home, e, cp, walkRoot, abs, seen); err != nil {
-					return nil, err
-				}
-				continue
+				p.consider(home, e, cp, abs, seen)
 			}
-			p.consider(home, e, cp, abs, seen)
 		}
 		if found {
 			p.Detected = append(p.Detected, e.ID)
@@ -412,6 +413,26 @@ func isBinary(path string) bool {
 		}
 	}
 	return false
+}
+
+// matchPaths expands a catalog path into the concrete paths it names.
+//
+// Globbing only happens when the pattern contains a wildcard, so an ordinary
+// path stays a single string and cannot be reinterpreted by a stray bracket in
+// a filename. The wildcard exists for directories whose name carries a version:
+// JetBrains writes its settings under IntelliJIdea2026.2, and naming that
+// literally means the entry stops working at the next IDE release.
+func matchPaths(home, p string) []string {
+	abs := expand(home, p)
+	if !strings.ContainsAny(p, "*?[") {
+		return []string{abs}
+	}
+	matches, err := filepath.Glob(abs)
+	if err != nil {
+		return nil
+	}
+	sort.Strings(matches)
+	return matches
 }
 
 func expand(home, p string) string {

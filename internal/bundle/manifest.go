@@ -185,7 +185,10 @@ func (r Repo) AtRisk() bool {
 // outside any single config file. Nothing here is copied — it is recorded so the
 // same things can be installed again from the same public sources.
 type System struct {
-	SDKs         map[string][]string `json:"sdks,omitempty"`
+	SDKs map[string][]string `json:"sdks,omitempty"`
+	// JDKs are the Java runtimes installed as packages rather than through a
+	// version manager, which on macOS is how almost all of them arrive.
+	JDKs         []JDK               `json:"jdks,omitempty"`
 	Toolchains   map[string][]string `json:"toolchains,omitempty"`
 	Extensions   map[string][]string `json:"editor_extensions,omitempty"`
 	LoginItems   []string            `json:"login_items,omitempty"`
@@ -288,4 +291,92 @@ type Brew struct {
 	// only that a count no longer matches.
 	Packages  []string `json:"packages,omitempty"`
 	Casknames []string `json:"casknames,omitempty"`
+}
+
+// JDK is one Java runtime installed on the old machine.
+//
+// Java is the language where the version that matters is least likely to come
+// from a version manager. On macOS a JDK is a package that lands in
+// /Library/Java/JavaVirtualMachines, so a scanner built around SDKMAN, pyenv and
+// nvm reported a JVM developer's machine as having no Java on it at all. The
+// arch is recorded because an Intel build on Apple Silicon runs under Rosetta,
+// which is usually an accident of history rather than a requirement, and is
+// worth seeing before it is reproduced on a new machine.
+type JDK struct {
+	Version string `json:"version"`
+	Vendor  string `json:"vendor,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Arch    string `json:"arch,omitempty"`
+	Path    string `json:"path"`
+}
+
+// Major returns the major version the way a person says it: 17 for 17.0.6, and
+// 8 for 1.8.0_271, which is the form Homebrew casks and java_home both use.
+func (j JDK) Major() string {
+	v := j.Version
+	if rest, ok := strings.CutPrefix(v, "1."); ok {
+		v = rest
+	}
+	if i := strings.IndexAny(v, "._-"); i > 0 {
+		v = v[:i]
+	}
+	return v
+}
+
+// jdkCasks maps a vendor to its Homebrew cask family and the majors that family
+// actually publishes.
+//
+// Written out rather than derived, for the same reason toolInstall is: a printed
+// command that does not exist is worse than no command. Oracle is the one to
+// watch — its casks stop at 17, because 8 and 11 are behind a subscription.
+var jdkCasks = []struct {
+	match  string
+	cask   string
+	majors []string
+}{
+	{"azul", "zulu", []string{"8", "11", "17", "21", "25"}},
+	{"amazon", "corretto", []string{"8", "11", "17", "21", "25"}},
+	{"microsoft", "microsoft-openjdk", []string{"11", "17", "21", "25"}},
+	{"ibm", "semeru-jdk-open", []string{"8", "11", "17", "21", "25"}},
+	{"eclipse", "temurin", []string{"8", "11", "17", "19", "20", "21", "25"}},
+	{"adoptium", "temurin", []string{"8", "11", "17", "19", "20", "21", "25"}},
+	{"temurin", "temurin", []string{"8", "11", "17", "19", "20", "21", "25"}},
+	{"oracle", "oracle-jdk", []string{"17", "21", "25"}},
+}
+
+// temurinMajors is the fallback family. Temurin is the reference free build of
+// OpenJDK and a drop-in for a vendor build of the same major in all but the
+// cases a project would have documented.
+var temurinMajors = []string{"8", "11", "17", "19", "20", "21", "25"}
+
+// InstallCommand returns the Homebrew command that puts an equivalent JDK back,
+// and whether it is the same vendor as the original.
+//
+// A different vendor is offered rather than withheld: the alternative is a
+// developer with no Java at all, and the vendor is printed alongside so the
+// substitution is visible rather than silent.
+func (j JDK) InstallCommand() (cmd string, sameVendor bool) {
+	vendor := strings.ToLower(j.Vendor + " " + j.Name)
+	major := j.Major()
+	for _, f := range jdkCasks {
+		if !strings.Contains(vendor, f.match) {
+			continue
+		}
+		// An Oracle-branded OpenJDK reference build is not the Oracle JDK cask.
+		if f.cask == "oracle-jdk" && strings.Contains(vendor, "openjdk") {
+			break
+		}
+		for _, m := range f.majors {
+			if m == major {
+				return "brew install --cask " + f.cask + "@" + major, true
+			}
+		}
+		break
+	}
+	for _, m := range temurinMajors {
+		if m == major {
+			return "brew install --cask temurin@" + major, false
+		}
+	}
+	return "", false
 }

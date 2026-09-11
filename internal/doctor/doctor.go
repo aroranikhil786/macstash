@@ -52,6 +52,7 @@ func Run(home string, man *bundle.Manifest, deep bool) []Check {
 	checks = append(checks, checkBrew(man)...)
 	checks = append(checks, checkScrubs(man)...)
 	checks = append(checks, checkSDKs(man)...)
+	checks = append(checks, checkJDKs(home, man)...)
 	checks = append(checks, checkToolchains(man)...)
 	checks = append(checks, checkExtensions(man)...)
 	checks = append(checks, checkApps(man)...)
@@ -586,4 +587,56 @@ func Summarise(checks []Check, verbose bool) string {
 			"about what was captured, not a guarantee that the machine is complete.\n")
 	}
 	return b.String()
+}
+
+// checkJDKs verifies the Java runtimes this machine is expected to have.
+//
+// Two different questions, because they fail independently. The bundle says
+// which JDKs the old machine had. The restored shell configuration says which
+// ones its aliases reach for, and that second list is the one that bites: an
+// alias asking for a version that is not installed does not fail, it silently
+// resolves to whatever JDK happens to be default, and the build that comes out
+// the other side is compiled against the wrong Java.
+func checkJDKs(home string, man *bundle.Manifest) []Check {
+	var checks []Check
+	considered := len(man.System.JDKs)
+
+	for _, gap := range restore.MissingJDKs(man.System.JDKs) {
+		detail := fmt.Sprintf("Java %s is recorded on the old machine but not installed here", gap.Major)
+		if !gap.SameVendor && gap.Vendor != "" {
+			detail += fmt.Sprintf(" (the recorded build was %s, which Homebrew does not carry)", gap.Vendor)
+		}
+		checks = append(checks, Check{Area: "java", Status: Missing, Detail: detail, Fix: gap.Instruction()})
+	}
+
+	// One check for all of them, not one per version. The explanation is the
+	// same sentence every time, and five copies of it bury the two lines above
+	// that say which JDKs to install.
+	var unresolved []string
+	for _, version := range restore.JavaVersionsWanted(home) {
+		considered++
+		if !restore.JDKInstalled(version) {
+			unresolved = append(unresolved, version)
+		}
+	}
+	if len(unresolved) > 0 {
+		verb := "are"
+		if len(unresolved) == 1 {
+			verb = "is"
+		}
+		checks = append(checks, Check{
+			Area: "java", Status: Missing,
+			Detail: fmt.Sprintf(
+				"your shell config asks java_home for %s, which %s not installed here. "+
+					"java_home answers a version it does not have with the default JDK and exits zero, "+
+					"so those aliases report success and hand over the wrong Java",
+				strings.Join(unresolved, ", "), verb),
+			Fix: "install those majors, or name a major you do have and add -F, which makes java_home fail instead of substituting",
+		})
+	}
+
+	if len(checks) == 0 && considered > 0 {
+		checks = append(checks, verified("java", "all %d Java version(s) checked resolve", considered))
+	}
+	return checks
 }
